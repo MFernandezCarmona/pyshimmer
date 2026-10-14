@@ -338,7 +338,7 @@ Things worth knowing, all measured on Shimmer3 units with LogAndStream 0.15.4:
 
 * The device needs about 1.5 s (up to 5 s) to start sampling after it acknowledged :code:`start_streaming`.
   Starting several devices on one adapter at the same moment fails; starting them one after the other works, also
-  while the others are streaming. Hold a :code:`ConnectLock` until :code:`start_streaming(wait_for_data=...)`
+  while the others are streaming (until the adapter is full: see the next point). Hold a :code:`ConnectLock` until :code:`start_streaming(wait_for_data=...)`
   has returned **and keep the next connection away for 1-2 s more**: :code:`ConnectLock(path, min_interval=2.0)`.
   The first data packet arrives before the device has settled; a connection made then fails ("The read loop
   crashed ... returned no data"), and from then on opening the rfcomm port answers :code:`EBUSY` ("Device or
@@ -347,6 +347,12 @@ Things worth knowing, all measured on Shimmer3 units with LogAndStream 0.15.4:
   1024 Hz took 41 to 86 s to stream (11-18 :code:`EBUSY` per affected unit) with the lock released at the first
   data, and 15-18 s (none) with :code:`min_interval=2.0`. Holding the lock 1 s after the first data was already
   enough in the same test.
+* One adapter carries about 90-100 kB/s in total, however many units are on it (measured with a Realtek USB adapter and
+  EXG1 streams of two channels, no CRC). Three units of 22.5 kB/s (24 bit at 2048 Hz) are clean (0-0.05 % of the packets
+  lost), four are at the limit (three lost less than 0.02 %, one 3 %), and five do not fit: the fifth does not connect
+  while four stream, and connected beforehand, all five lose 8-28 %. Five units of 11.3 kB/s (1024 Hz) are clean. A
+  unit that connects while four others stream took 48-179 s. Spread more units, or a faster stream, over several
+  adapters; the table is in the README of :code:`ros_shimmer/shimmer_sensor`.
 * The Bluetooth module sustains about 22 kB/s without losses. At 2048 Hz an EXG1 stream is 22.5 kB/s without CRC and
   26.6 kB/s with the 2-byte CRC: pass :code:`crc='off'` (or :code:`crc=1`) at the top of the range.
 * Do not poll the device while it streams: each command costs about 7 samples at 2 kHz. Use the watchdog.
