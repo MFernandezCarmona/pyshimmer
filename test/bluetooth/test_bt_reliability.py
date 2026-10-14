@@ -41,7 +41,9 @@ from pyshimmer.bluetooth.bt_errors import (
 )
 from pyshimmer.bluetooth.bt_lock import ConnectLock
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial
+from pyshimmer.dev.battery import ChargingStatus
 from pyshimmer.dev.channels import EChannelType
+from pyshimmer.dev.exg import ExGRegister
 from pyshimmer.dev.revisions import HardwareVersion, RevisionRegistry
 from test.bluetooth.fake_device import FakeDevice
 
@@ -798,6 +800,108 @@ class ExGConfigurationTest(_ApiTestCase):
         pd, dev = self.make(device_kwargs={"sampling_dr": 16})
         dev.start_streaming(check_exg=False)
         self.assertNotIn(0x63, [c for c, _ in pd.device.commands])
+
+
+class WriteExGRegisterTest(_ApiTestCase):
+    """Writing a whole configuration to a chip and checking what it took"""
+
+    def test_the_whole_configuration_is_written_and_read_back(self):
+        pd, dev = self.make()
+        wanted = ExGRegister.emg_preset(rate_sps=4000, gain=6)
+
+        back = dev.write_exg_register(0, wanted)
+
+        self.assertEqual(bytes(pd.device.exg_regs), wanted.binary)
+        self.assertEqual(back, wanted)
+        # a single write of the ten bytes, and one read after it
+        codes = [c for c, _ in pd.device.commands if c in (0x61, 0x63)]
+        self.assertEqual(codes, [0x61, 0x63])
+
+    @staticmethod
+    def acknowledge_without_storing(pd) -> None:
+        """Make the device acknowledge the ExG write and keep the registers it had"""
+        original = pd.device._handle
+
+        def handle(code, args):
+            if code == 0x61:
+                pd.device._write(pd.device._reply())
+            else:
+                original(code, args)
+
+        pd.device._handle = handle
+
+    def test_a_chip_that_took_something_else_is_reported(self):
+        pd, dev = self.make()
+        self.acknowledge_without_storing(pd)
+
+        with self.assertRaises(ShimmerError) as ctx:
+            dev.write_exg_register(0, ExGRegister.emg_preset(rate_sps=4000))
+        self.assertIn("did not take the configuration", str(ctx.exception))
+
+    def test_a_refusal_is_reported(self):
+        pd, dev = self.make()
+        pd.device.refuse.add(0x61)  # the device answers NACK
+
+        with self.assertRaises(CommandRefused):
+            dev.write_exg_register(0, ExGRegister.emg_preset(rate_sps=4000))
+
+    def test_a_device_that_changes_a_bit_it_owns_is_not_an_error(self):
+        pd, dev = self.make()
+        wanted = ExGRegister.emg_preset(rate_sps=4000)
+
+        original_handle = pd.device._handle
+
+        def handle(code, args):
+            original_handle(code, args)
+            if code == 0x61:
+                pd.device.exg_regs[1] &= ~0x08  # the firmware clears the board bit
+                pd.device.exg_regs[7] = 0x0F  # and a status register shows lead-off
+
+        pd.device._handle = handle
+        back = dev.write_exg_register(0, wanted)
+
+        self.assertEqual(back.binary[1], wanted.binary[1] & ~0x08)
+
+    def test_a_mismatch_can_be_accepted_when_not_verifying(self):
+        pd, dev = self.make()
+        self.acknowledge_without_storing(pd)
+
+        wanted = ExGRegister.emg_preset(rate_sps=125)  # not what the device holds
+
+        back = dev.write_exg_register(0, wanted, verify=False)
+
+        self.assertNotEqual(back, wanted)
+
+
+class DeviceInformationTest(_ApiTestCase):
+    """What the node reads before it configures a device"""
+
+    def test_the_expansion_board(self):
+        pd, dev = self.make()
+        board = dev.get_expansion_board()
+        self.assertEqual(str(board), "ExG (SR47-4.0)")
+        self.assertTrue(board.has_exg)
+
+    def test_the_battery_with_its_charging_status(self):
+        pd, dev = self.make()
+        pd.device.battery_adc = 0x0B2E
+        pd.device.charging = 0x40
+
+        reading = dev.get_battery_reading()
+
+        self.assertAlmostEqual(reading.voltage, 4.168246153846154)
+        self.assertEqual(reading.charging_status, ChargingStatus.FULLY_CHARGED)
+
+    def test_the_battery_can_be_read_while_streaming(self):
+        pd, dev = self.make()
+        got = self.start_stream(dev)
+        self.assertTrue(self.wait_for(lambda: len(got) > 5))
+
+        reading = dev.get_battery_reading()
+
+        self.assertGreater(reading.voltage, 0)
+        self.assertTrue(self.wait_for(lambda: len(got) > 20))
+        dev.stop_streaming()
 
 
 class ThroughputWarningTest(_ApiTestCase):

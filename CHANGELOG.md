@@ -34,6 +34,16 @@ adapter; see `shimmer_reliability/RESULTADOS.md` in the workspace for the data.
   inject faults.
 - A refusal (NACK) is understood by the tolerant receiver, with and without CRC: the command raises
   `CommandRefused` and the link stays usable. Unsolicited ones are counted (`link_stats['unexpected_nacks']`).
+- ExG configuration as a whole. `ExGRegister` can be built field by field (`with_gain()`, `with_mux()`,
+  `with_powerdown()`, `with_test_signal()`, `with_rld()`, `with_leadoff()`), checked (`problems()`: the bits the chip
+  fixes, the values marked DO NOT USE, single-shot mode and the 4.033 V reference, which the conversions do not
+  support) and compared (`same_configuration()` ignores the bits that belong to the device). New properties:
+  `test_signal`, `leadoff_*`, `single_shot`, `vref_volts`. `ExGRegister.test_preset()`.
+  `ShimmerBluetooth.write_exg_register()` writes the ten bytes of a chip and reads them back.
+- `ShimmerBluetooth.get_battery_reading()`: voltage, capacity and the charging status byte of the response
+  (`BatteryReading`, `ChargingStatus`). It can be used while streaming; each call costs about 5 packets at 2048 Hz.
+- `ShimmerBluetooth.get_expansion_board()` (`ExpansionBoard`): the identification of the board under the Shimmer3,
+  with `has_exg`.
 
 ### Changed
 - Format code base with black

@@ -360,6 +360,36 @@ Things worth knowing, all measured on Shimmer3 units with LogAndStream 0.15.4:
   yours with ``shimmer_reliability/device_experiment.py sweep``.
 * The full set of sensors of the ROS node (accelerometers, gyroscope, magnetometer, battery and EXG) at 1024 Hz
   loses 17 % of the packets: stream the ExG channels alone at high rates.
+* The battery is better asked for than streamed. As a channel of the data packet it costs 2 bytes in every packet
+  (26.6 kB/s instead of 22.5 kB/s at 2048 Hz); asked for with :code:`get_battery_reading()` it costs about 5
+  packets per reading, which is 0.004 % of the stream once a minute (and 0.24 % once a second). The reading also
+  carries the charging status byte, which the data packet does not.
+
+Configuring the ExG chips
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+An ExG register is built field by field from a preset, checked, written and read back:
+
+.. code-block:: python
+
+    from pyshimmer import ExGMux, ExGRegister
+
+    wanted = (
+        ExGRegister.emg_preset(rate_sps=4000, gain=12)
+        .with_mux(1, ExGMux.SHORTED)       # to measure the noise of the chip
+        .with_leadoff(detection=True)      # the status byte of every packet then shows a loose electrode
+    )
+    assert wanted.problems() == []         # the bits the chip fixes, DO NOT USE values, single-shot...
+
+    current = shim_dev.get_exg_register(0)
+    shim_dev.write_exg_register(0, wanted.keeping_board_bits_of(current))   # raises if the chip took something else
+
+    board = shim_dev.get_expansion_board()   # ExG (SR47-4.0): board.has_exg
+    print(shim_dev.get_battery_reading())    # voltage, capacity and the charging status byte
+
+The writes are volatile: a device that is switched off goes back to the configuration it stores (Consensys writes
+that). :code:`keeping_board_bits_of()` leaves the bit of CONFIG2 that the firmware sets for the revision of the
+board as the device reports it.
 
 Using the Dock API
 ^^^^^^^^^^^^^^^^^^

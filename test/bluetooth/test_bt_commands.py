@@ -22,6 +22,8 @@ from pyshimmer.bluetooth.bt_commands import (
     ShimmerCommand,
     GetSamplingRateCommand,
     GetBatteryCommand,
+    GetBatteryReadingCommand,
+    GetExpansionBoardCommand,
     GetConfigTimeCommand,
     SetConfigTimeCommand,
     GetRealTimeClockCommand,
@@ -49,7 +51,9 @@ from pyshimmer.bluetooth.bt_commands import (
     GetAllCalibrationCommand,
 )
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial
+from pyshimmer.dev.battery import BatteryReading, ChargingStatus
 from pyshimmer.dev.channels import EChannelType, ESensorGroup
+from pyshimmer.dev.expansion_board import ExpansionBoard
 from pyshimmer.dev.fw_version import FirmwareType
 
 from pyshimmer.dev.revisions import HardwareVersion, HardwareRevision, RevisionRegistry
@@ -138,6 +142,44 @@ class TestBluetoothCommands:
         self.assert_cmd(
             cmd, b"\x95", b"\x8a\x94", b"\x8a\x94\x2e\x0b\x80", 4.168246153846154
         )
+
+    @pytest.mark.parametrize("rev", RevisionRegistry.ALL_REVISIONS)
+    def test_get_battery_reading_command(self, rev: HardwareRevision):
+        cmd = GetBatteryReadingCommand(rev)
+        reading = self.assert_cmd(cmd, b"\x95", b"\x8a\x94", b"\x8a\x94\x2e\x0b\x80")
+
+        assert reading.voltage == pytest.approx(4.168246153846154)
+        assert reading.percent == 100
+        assert reading.status_byte == 0x80
+        assert reading.charging_status == ChargingStatus.PRECONDITIONING
+
+    @pytest.mark.parametrize("rev", RevisionRegistry.ALL_REVISIONS)
+    def test_battery_reading_reports_a_status_byte_the_manual_does_not_list(self, rev):
+        cmd = GetBatteryReadingCommand(rev)
+        reading = self.assert_cmd(cmd, b"\x95", b"\x8a\x94", b"\x8a\x94\x2e\x0b\x21")
+
+        assert reading.status_byte == 0x21
+        assert reading.charging_status is None
+
+    @pytest.mark.parametrize("rev", RevisionRegistry.ALL_REVISIONS)
+    def test_get_expansion_board_command(self, rev: HardwareRevision):
+        cmd = GetExpansionBoardCommand(rev)
+        self.assert_cmd(
+            cmd,
+            b"\x66\x03\x00",
+            b"\x65",
+            b"\x65\x03\x2f\x04\x00",
+            ExpansionBoard(47, 4, 0),
+        )
+
+    @pytest.mark.parametrize("rev", RevisionRegistry.ALL_REVISIONS)
+    def test_expansion_board_response_that_is_too_short_is_an_error(self, rev):
+        serial, mock = self.create_mock()
+        cmd = GetExpansionBoardCommand(rev)
+        cmd.send(serial)
+        mock.test_put_read_data(b"\x65\x01\x2f")
+        with pytest.raises(ValueError):
+            cmd.receive(serial)
 
     @pytest.mark.parametrize("rev", RevisionRegistry.ALL_REVISIONS)
     def test_set_sensors_command(self, rev: HardwareRevision):

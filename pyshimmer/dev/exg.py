@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from enum import Enum
 
 from pyshimmer.util import bit_is_set, fmt_hex
@@ -197,9 +198,279 @@ class ExGRegister:
                 f"not {rate_sps}"
             )
 
+        return self._with_bits(0, 0x07, self.DATA_RATE_INDEX[rate_sps])
+
+    def _with_bits(self, index: int, mask: int, value: int) -> ExGRegister:
+        """Return a copy of the registers with the bits of ``mask`` in byte ``index``
+        replaced by those of ``value``"""
         reg = bytearray(self._reg_bin)
-        reg[0] = (reg[0] & 0xF8) | self.DATA_RATE_INDEX[rate_sps]
+        reg[index] = (reg[index] & ~mask & 0xFF) | (value & mask)
         return ExGRegister(bytes(reg))
+
+    # ---------------------------------------------------------------------------------------------
+    # The bit fields below follow Table 3-1 of the EMG User Guide (Rev 1.12), the ADS1292R and the
+    # way ShimmerCapture (the official application of the C# API) sets them up.
+
+    TEST_SIGNALS = {"off": 0b00, "dc": 0b10, "square": 0b11}
+    LEADOFF_CURRENTS = {"6nA": 0, "22nA": 1, "6uA": 2, "22uA": 3}
+    LEADOFF_THRESHOLDS = (95.0, 92.5, 90.0, 87.5, 85.0, 80.0, 75.0, 70.0)
+    # What the chip is told about the "common mode" (right leg drive) of the electrodes
+    REFERENCE_VOLTS = 2.42
+
+    # Bits that belong to the device and not to the configuration: CONFIG2 bit 3 is set by the
+    # firmware according to the revision of the ExG board, and LOFF_STAT is a status register
+    # (only CLK_DIV can be written)
+    _CONFIGURATION_MASK = bytes(
+        (0xFF, 0xF7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x40, 0xFF, 0xFF)
+    )
+
+    @property
+    def single_shot(self) -> bool:
+        """True if the chip converts once and stops (never what a stream wants)"""
+        return bit_is_set(self._reg_bin[0], 0x80)
+
+    @property
+    def test_signal(self) -> str:
+        """The internal test signal generator: "off", "dc" or "square" (1 Hz)"""
+        bits = self._reg_bin[1] & 0b11
+        if not bits & 0b10:
+            return "off"
+        return "square" if bits & 0b01 else "dc"
+
+    @property
+    def vref_4v(self) -> bool:
+        """True if the reference of the converter is 4.033 V instead of 2.42 V"""
+        return bit_is_set(self._reg_bin[1], 0x10)
+
+    @property
+    def leadoff_comparators(self) -> bool:
+        """True if the lead-off comparators are on"""
+        return bit_is_set(self._reg_bin[1], 0x40)
+
+    @property
+    def leadoff_current(self) -> str:
+        """The lead-off current: "6nA", "22nA", "6uA" or "22uA" """
+        index = (self._reg_bin[2] >> 2) & 0b11
+        return next(k for k, v in self.LEADOFF_CURRENTS.items() if v == index)
+
+    @property
+    def leadoff_threshold(self) -> float:
+        """The lead-off comparator threshold, as the percentage of the supply that the
+        positive input must stay under (the negative one over its complement)"""
+        return self.LEADOFF_THRESHOLDS[(self._reg_bin[2] >> 5) & 0b111]
+
+    @property
+    def leadoff_detection(self) -> bool:
+        """True if lead-off detection is on: comparators and at least one sensed input"""
+        return self.leadoff_comparators and bool(self._reg_bin[6] & 0x0F)
+
+    @property
+    def vref_volts(self) -> float:
+        """The reference voltage the conversions are scaled with"""
+        return 4.033 if self.vref_4v else self.REFERENCE_VOLTS
+
+    def with_gain(self, ch_id: int, gain: int) -> ExGRegister:
+        """Return a copy of the registers with another gain in one channel
+
+        :param ch_id: The channel, 0 or 1
+        :param gain: One of 1, 2, 3, 4, 6, 8, 12
+        :raises ValueError: If the chip does not support the gain
+        """
+        self.check_ch_id(ch_id)
+        if gain not in self.GAIN_INDEX:
+            raise ValueError(
+                f"The ExG chips support the gains {sorted(self.GAIN_INDEX)}, not {gain}"
+            )
+        return self._with_bits(3 + ch_id, 0x70, self.GAIN_INDEX[gain] << 4)
+
+    def with_mux(self, ch_id: int, mux: ExGMux) -> ExGRegister:
+        """Return a copy of the registers with another input in one channel
+
+        :param ch_id: The channel, 0 or 1
+        :param mux: What the input multiplexer connects to the amplifier
+        :raises ValueError: For the multiplexer values the chip does not define
+        """
+        self.check_ch_id(ch_id)
+        if mux is ExGMux.RESERVED:
+            raise ValueError("The multiplexer value is reserved")
+        return self._with_bits(3 + ch_id, 0x0F, mux.value)
+
+    def with_powerdown(self, ch_id: int, powerdown: bool) -> ExGRegister:
+        """Return a copy of the registers with one channel powered down (or up)
+
+        A channel that is powered down still sends its bytes in every packet.
+        """
+        self.check_ch_id(ch_id)
+        return self._with_bits(3 + ch_id, self.PD_BIT, self.PD_BIT if powerdown else 0)
+
+    def with_test_signal(self, mode: str) -> ExGRegister:
+        """Return a copy of the registers with the internal test signal generator on or
+        off
+
+        The signal reaches a channel only if its multiplexer is :attr:`ExGMux.TEST_SIGNAL`.
+
+        :param mode: One of "off", "dc" and "square" (a 1 Hz square wave of +-1 mV)
+        """
+        if mode not in self.TEST_SIGNALS:
+            raise ValueError(
+                f"The test signal must be one of {list(self.TEST_SIGNALS)}"
+            )
+        return self._with_bits(1, 0b11, self.TEST_SIGNALS[mode])
+
+    def with_rld(
+        self,
+        enabled: bool | None = None,
+        channels: Iterable[ExGRLDLead] | None = None,
+        internal_reference: bool | None = None,
+    ) -> ExGRegister:
+        """Return a copy of the registers with other right leg drive settings
+
+        :param enabled: Power of the RLD buffer (None: leave as it is)
+        :param channels: The inputs the RLD amplifier senses (None: leave as they are)
+        :param internal_reference: True for the internally generated RLD reference,
+            False for an external one (None: leave as it is)
+        """
+        new = self
+        if enabled is not None:
+            new = new._with_bits(5, self.RLD_PD_BIT, self.RLD_PD_BIT if enabled else 0)
+        if channels is not None:
+            nibble = 0
+            for lead in channels:
+                nibble |= lead.value
+            new = new._with_bits(5, 0x0F, nibble)
+        if internal_reference is not None:
+            new = new._with_bits(9, 0x02, 0x02 if internal_reference else 0)
+        return new
+
+    def with_leadoff(
+        self,
+        detection: bool | None = None,
+        current: str | None = None,
+        threshold: float | None = None,
+    ) -> ExGRegister:
+        """Return a copy of the registers with other lead-off detection settings
+
+        Turning the detection on does what ShimmerCapture does for chip 1: DC detection with
+        the comparators on, the RLD sensing the loss and the inputs 1P, 1N and 2P sensed.
+        The status is then in the status byte of every ExG data packet.
+
+        :param detection: True to turn the detection on, False to turn it off (None: leave)
+        :param current: One of "6nA", "22nA", "6uA", "22uA" (None: leave)
+        :param threshold: One of :attr:`LEADOFF_THRESHOLDS` (None: leave)
+        """
+        if current is not None and current not in self.LEADOFF_CURRENTS:
+            raise ValueError(
+                f"The lead-off current must be one of {list(self.LEADOFF_CURRENTS)}"
+            )
+        if threshold is not None and threshold not in self.LEADOFF_THRESHOLDS:
+            raise ValueError(
+                f"The lead-off threshold must be one of {list(self.LEADOFF_THRESHOLDS)}"
+            )
+
+        new = self
+        if detection is not None:
+            on = bool(detection)
+            new = new._with_bits(1, 0x40, 0x40 if on else 0)  # PDB_LOFF_COMP
+            new = new._with_bits(5, 0x10, 0x10 if on else 0)  # RLD_LOFF_SENS
+            new = new._with_bits(6, 0x0F, 0x07 if on else 0)  # LOFF1P, LOFF1N, LOFF2P
+            new = new._with_bits(2, 0x01, 0)  # DC detection
+        if current is not None:
+            new = new._with_bits(2, 0x0C, self.LEADOFF_CURRENTS[current] << 2)
+        if threshold is not None:
+            new = new._with_bits(2, 0xE0, self.LEADOFF_THRESHOLDS.index(threshold) << 5)
+        return new
+
+    def keeping_board_bits_of(self, current: ExGRegister) -> ExGRegister:
+        """Return a copy of the registers with the bits the firmware sets according to the
+        revision of the ExG board (CONFIG2 bit 3) as ``current`` has them
+
+        Writing a configuration over what the device reports must not undo that.
+        """
+        return self._with_bits(1, 0x08, current.binary[1])
+
+    def same_configuration(self, other: ExGRegister) -> bool:
+        """True if two register contents configure the chip alike
+
+        The bits that belong to the device (the board revision bit and the lead-off status)
+        are not compared, so that what a device reports after a write can be checked against
+        what was written.
+        """
+        return all(
+            (a ^ b) & mask == 0
+            for a, b, mask in zip(self._reg_bin, other.binary, self._CONFIGURATION_MASK)
+        )
+
+    def problems(self) -> list[str]:
+        """What is wrong with the register contents, as readable sentences
+
+        The checks are the bits the chip fixes (as Table 3-1 of the EMG User Guide shows
+        them), the values the guide marks DO NOT USE, the single-shot mode (the chip would
+        stop) and the 4.033 V reference (the library converts with 2.42 V). The
+        configurations of Consensys and of the official APIs (ECG, EMG, test signal and
+        respiration) have none.
+
+        :return: The list of problems, empty if there is none
+        """
+        b = self._reg_bin
+        found = []
+
+        if b[0] & 0x80:
+            found.append("CONFIG1: single-shot mode: the chip converts once and stops")
+        if b[0] & 0x78:
+            found.append("CONFIG1: the reserved bits 6:3 must be 0")
+        if b[0] & 0x07 == 7:
+            found.append("CONFIG1: data rate bits 111 are marked DO NOT USE")
+        if not b[1] & 0x80:
+            found.append("CONFIG2: bit 7 must be 1")
+        if b[1] & 0x04:
+            found.append("CONFIG2: bit 2 must be 0")
+        if b[1] & 0x10:
+            found.append(
+                "CONFIG2: the 4.033 V reference is not supported, the data is "
+                "converted with 2.42 V"
+            )
+        if not b[2] & 0x10:
+            found.append("LOFF: bit 4 must be 1")
+        if b[2] & 0x02:
+            found.append("LOFF: bit 1 must be 0")
+        for ch in (0, 1):
+            name = f"CH{ch + 1}SET"
+            if (b[3 + ch] >> 4) & 0x07 == 7:
+                found.append(f"{name}: gain bits 111 are marked DO NOT USE")
+            if b[3 + ch] & 0x0F > ExGMux.INPUT3.value:
+                found.append(
+                    f"{name}: multiplexer value {b[3 + ch] & 0x0F} is reserved"
+                )
+        if b[5] & 0xC0:
+            found.append("RLD_SENS: the reserved bits 7:6 must be 0")
+        if b[6] & 0xC0:
+            found.append("LOFF_SENS: the reserved bits 7:6 must be 0")
+        if b[7] & 0xA0:
+            found.append("LOFF_STAT: the reserved bits 7 and 5 must be 0")
+        if not b[8] & 0x02:
+            found.append("RESP1: bit 1 must be 1")
+        if b[9] & 0x78:
+            found.append("RESP2: the reserved bits 6:3 must be 0")
+        if not b[9] & 0x01:
+            found.append("RESP2: bit 0 must be 1")
+        return found
+
+    @classmethod
+    def test_preset(cls, rate_sps: int = 2000, gain: int = 12) -> ExGRegister:
+        """The register contents of a Shimmer3 left in test signal mode by Consensys
+
+        Both channels read the 1 Hz square wave of the internal generator, which is how a
+        unit is checked without electrodes (EMG User Guide, 8.1).
+
+        :param rate_sps: The data rate, see :meth:`with_data_rate`
+        :param gain: The gain of both channels, one of 1, 2, 3, 4, 6, 8, 12
+        """
+        return (
+            cls.emg_preset(rate_sps, gain)
+            .with_test_signal("square")
+            .with_mux(0, ExGMux.TEST_SIGNAL)
+            .with_mux(1, ExGMux.TEST_SIGNAL)
+        )
 
     @classmethod
     def emg_preset(cls, rate_sps: int = 2000, gain: int = 12) -> ExGRegister:

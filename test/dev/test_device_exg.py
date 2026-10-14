@@ -205,3 +205,162 @@ class ExGRegisterHelpersTest(TestCase):
             ExGRegister.emg_preset(gain=5)
         with self.assertRaises(ValueError):
             ExGRegister.emg_preset(rate_sps=1024)
+
+
+class ExGRegisterBuildersTest(TestCase):
+    """The register contents that Consensys and the official APIs write, and the changes the node makes to them"""
+
+    EMG = bytes([0x04, 0xA8, 0x10, 0x69, 0x60, 0x20, 0x00, 0x00, 0x02, 0x03])
+    TEST = bytes([0x03, 0xAB, 0x10, 0x65, 0x65, 0x20, 0x00, 0x00, 0x02, 0x03])
+    # The defaults of the C# API (and of ShimmerCapture) for each chip
+    OFFICIAL = {
+        "ecg1": [0x00, 0xA0, 0x10, 0x40, 0x40, 0x2D, 0x00, 0x00, 0x02, 0x03],
+        "ecg2": [0x00, 0xA0, 0x10, 0x40, 0x47, 0x00, 0x00, 0x00, 0x02, 0x01],
+        "emg1": [0x00, 0xA0, 0x10, 0x69, 0x60, 0x20, 0x00, 0x00, 0x02, 0x03],
+        "emg2": [0x00, 0xA0, 0x10, 0xE1, 0xE1, 0x00, 0x00, 0x00, 0x02, 0x01],
+        "test1": [0x00, 0xA3, 0x10, 0x45, 0x45, 0x00, 0x00, 0x00, 0x02, 0x01],
+        "test2": [0x00, 0xA3, 0x10, 0x45, 0x45, 0x00, 0x00, 0x00, 0x02, 0x01],
+        "respiration1": [0x02, 0xA8, 0x10, 0x40, 0x40, 0x20, 0x00, 0x00, 0x02, 0x03],
+        "respiration2": [0x02, 0xA0, 0x10, 0x40, 0x40, 0x00, 0x00, 0x00, 0xEA, 0x01],
+    }
+
+    def test_the_configurations_of_the_units_and_the_official_apis_have_no_problems(
+        self,
+    ):
+        regs = {k: bytes(v) for k, v in self.OFFICIAL.items()}
+        regs.update(emg_unit=self.EMG, test_unit=self.TEST)
+        for name, reg_bin in regs.items():
+            self.assertEqual(ExGRegister(reg_bin).problems(), [], name)
+
+    def test_the_presets_have_no_problems(self):
+        for rate in (125, 250, 500, 1000, 2000, 4000, 8000):
+            for gain in (1, 2, 3, 4, 6, 8, 12):
+                self.assertEqual(ExGRegister.emg_preset(rate, gain).problems(), [])
+                self.assertEqual(ExGRegister.test_preset(rate, gain).problems(), [])
+
+    def test_test_preset_is_what_a_unit_in_test_signal_mode_holds(self):
+        self.assertEqual(ExGRegister.test_preset(rate_sps=1000).binary, self.TEST)
+
+    def test_each_problem_is_found(self):
+        def problems_with(index, value):
+            reg = bytearray(self.EMG)
+            reg[index] = value
+            return " ".join(ExGRegister(bytes(reg)).problems())
+
+        self.assertIn("single-shot", problems_with(0, 0x84))
+        self.assertIn("reserved bits 6:3", problems_with(0, 0x0C))
+        self.assertIn("DO NOT USE", problems_with(0, 0x07))
+        self.assertIn("CONFIG2: bit 7", problems_with(1, 0x28))
+        self.assertIn("4.033 V", problems_with(1, 0xB8))
+        self.assertIn("LOFF: bit 4", problems_with(2, 0x00))
+        self.assertIn("gain bits 111", problems_with(3, 0x79))
+        self.assertIn("multiplexer value 10", problems_with(4, 0x6A))
+        self.assertIn("RLD_SENS", problems_with(5, 0xA0))
+        self.assertIn("RESP1", problems_with(8, 0x00))
+        self.assertIn("RESP2: bit 0", problems_with(9, 0x02))
+
+    def test_builders_change_only_their_bits(self):
+        emg = ExGRegister(self.EMG)
+
+        def hexed(reg):
+            return reg.binary.hex()
+
+        self.assertEqual(hexed(emg.with_gain(0, 6)), "04a810096020000002" "03")
+        self.assertEqual(hexed(emg.with_gain(1, 1)), "04a810691020000002" "03")
+        self.assertEqual(
+            hexed(emg.with_mux(1, ExGMux.SHORTED)), "04a8106961200000" "0203"
+        )
+        self.assertEqual(emg.with_mux(0, ExGMux.NORMAL).binary[3], 0x60)
+        self.assertEqual(emg.with_powerdown(1, True).binary[4], 0xE0)
+        self.assertEqual(emg.with_powerdown(1, True).with_powerdown(1, False), emg)
+        self.assertEqual(emg.with_test_signal("square").binary[1], 0xAB)
+        self.assertEqual(emg.with_test_signal("dc").binary[1], 0xAA)
+        self.assertEqual(emg.with_test_signal("square").with_test_signal("off"), emg)
+        self.assertEqual(emg.with_data_rate(4000).binary[0], 0x05)
+
+    def test_gain_mux_and_test_signal_are_validated(self):
+        emg = ExGRegister(self.EMG)
+        with self.assertRaises(ValueError):
+            emg.with_gain(0, 5)
+        with self.assertRaises(ValueError):
+            emg.with_gain(2, 12)
+        with self.assertRaises(ValueError):
+            emg.with_mux(0, ExGMux.RESERVED)
+        with self.assertRaises(ValueError):
+            emg.with_test_signal("sine")
+
+    def test_test_signal_property(self):
+        self.assertEqual(ExGRegister(self.EMG).test_signal, "off")
+        self.assertEqual(ExGRegister(self.TEST).test_signal, "square")
+        self.assertEqual(ExGRegister(self.EMG).with_test_signal("dc").test_signal, "dc")
+        # the frequency bit means nothing while the generator is off
+        reg = bytearray(self.EMG)
+        reg[1] = 0xA9
+        self.assertEqual(ExGRegister(bytes(reg)).test_signal, "off")
+
+    def test_rld(self):
+        emg = ExGRegister(self.EMG)
+        self.assertEqual(emg.rld_channels, [])
+        self.assertFalse(emg.rld_powerdown)
+        self.assertEqual(emg.rld_ref, ERLDRef.INTERNAL)
+
+        new = emg.with_rld(channels=[ExGRLDLead.RLD1P, ExGRLDLead.RLD1N])
+        self.assertEqual(new.rld_channels, [ExGRLDLead.RLD1P, ExGRLDLead.RLD1N])
+        self.assertEqual(new.binary[5], 0x23)  # "Inverse of Ch1" in ShimmerCapture
+        self.assertTrue(emg.with_rld(enabled=False).rld_powerdown)
+        self.assertEqual(
+            emg.with_rld(internal_reference=False).rld_ref, ERLDRef.EXTERNAL
+        )
+        self.assertEqual(emg.with_rld(), emg)
+
+    def test_leadoff_detection_is_set_up_as_shimmercapture_does(self):
+        emg = ExGRegister(self.EMG)
+        self.assertFalse(emg.leadoff_detection)
+
+        on = emg.with_leadoff(detection=True)
+        self.assertTrue(on.leadoff_detection)
+        self.assertEqual(on.binary[1], 0xE8)  # PDB_LOFF_COMP
+        self.assertEqual(on.binary[5], 0x30)  # RLD_LOFF_SENS
+        self.assertEqual(on.binary[6], 0x07)  # LOFF1P, LOFF1N and LOFF2P
+        self.assertEqual(on.with_leadoff(detection=False), emg)
+        self.assertEqual(on.problems(), [])
+
+    def test_leadoff_current_and_threshold(self):
+        emg = ExGRegister(self.EMG)
+        self.assertEqual(emg.leadoff_current, "6nA")
+        self.assertEqual(emg.leadoff_threshold, 95.0)
+
+        new = emg.with_leadoff(current="22uA", threshold=70.0)
+        self.assertEqual(new.binary[2], 0xE0 | 0x10 | 0x0C)
+        self.assertEqual(new.leadoff_current, "22uA")
+        self.assertEqual(new.leadoff_threshold, 70.0)
+        with self.assertRaises(ValueError):
+            emg.with_leadoff(current="1A")
+        with self.assertRaises(ValueError):
+            emg.with_leadoff(threshold=50.0)
+
+    def test_same_configuration_ignores_what_belongs_to_the_device(self):
+        emg = ExGRegister(self.EMG)
+        board_bit = bytearray(self.EMG)
+        board_bit[1] ^= 0x08
+        status = bytearray(self.EMG)
+        status[7] = 0x1F  # lead-off status of the inputs
+        self.assertTrue(emg.same_configuration(ExGRegister(bytes(board_bit))))
+        self.assertTrue(emg.same_configuration(ExGRegister(bytes(status))))
+        self.assertFalse(emg.same_configuration(emg.with_gain(0, 6)))
+        self.assertFalse(emg.same_configuration(emg.with_data_rate(125)))
+
+    def test_the_board_bit_of_the_device_is_kept(self):
+        wanted = ExGRegister.emg_preset()  # has bit 3 of CONFIG2 set
+        current = bytearray(self.EMG)
+        current[1] &= ~0x08 & 0xFF  # an older board revision
+        kept = wanted.keeping_board_bits_of(ExGRegister(bytes(current)))
+        self.assertEqual(kept.binary[1], 0xA0)
+        self.assertEqual(kept.binary[0], wanted.binary[0])
+        self.assertEqual(kept.binary[2:], wanted.binary[2:])
+
+    def test_vref(self):
+        self.assertAlmostEqual(ExGRegister(self.EMG).vref_volts, 2.42)
+        reg = bytearray(self.EMG)
+        reg[1] |= 0x10
+        self.assertAlmostEqual(ExGRegister(bytes(reg)).vref_volts, 4.033)

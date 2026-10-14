@@ -50,6 +50,8 @@ from pyshimmer.bluetooth.bt_commands import (
     SetDeviceNameCommand,
     DummyCommand,
     GetBatteryCommand,
+    GetBatteryReadingCommand,
+    GetExpansionBoardCommand,
     SetSamplingRateCommand,
     SetSensorsCommand,
     SetStatusAckCommand,
@@ -77,8 +79,10 @@ from pyshimmer.bluetooth.bt_errors import (
 from pyshimmer.bluetooth.bt_lock import ConnectLock
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial, FrameView, IncompleteFrame
 from pyshimmer.dev.base import DEFAULT_BAUDRATE
+from pyshimmer.dev.battery import BatteryReading
 from pyshimmer.dev.channels import ChannelDataType, EChannelType, ESensorGroup
 from pyshimmer.dev.exg import ExGRegister, exg_data_rate_for_sampling_rate, is_exg_ch
+from pyshimmer.dev.expansion_board import ExpansionBoard
 from pyshimmer.dev.fw_version import (
     FirmwareType,
     FirmwareVersion,
@@ -1580,6 +1584,25 @@ class ShimmerBluetooth:
         """
         return self._process_and_wait(GetBatteryCommand(self._revision, in_percent))
 
+    def get_battery_reading(self) -> BatteryReading:
+        """Retrieve the battery voltage, the capacity estimated from it and the
+        charging status
+
+        Unlike :meth:`get_battery_state` it returns the charging status byte of the
+        response as well. It can be called while the device streams; every in-stream
+        command costs a few data packets (about 5 at 2048 Hz).
+
+        :return: The reading of the battery
+        """
+        return self._process_and_wait(GetBatteryReadingCommand(self._revision))
+
+    def get_expansion_board(self) -> ExpansionBoard:
+        """Retrieve the identification of the expansion board under the Shimmer3
+
+        :return: The board: for the ECG and EMG units, ``board.has_exg`` is True
+        """
+        return self._process_and_wait(GetExpansionBoardCommand(self._revision))
+
     def get_config_time(self) -> int:
         """Get the config time from the device as configured in the configuration file
 
@@ -1664,6 +1687,31 @@ class ShimmerBluetooth:
         :param data: The data bytes to write
         """
         self._process_and_wait(SetEXGRegsCommand(self._revision, chip_id, offset, data))
+
+    def write_exg_register(
+        self, chip_id: int, register: ExGRegister, verify: bool = True
+    ) -> ExGRegister:
+        """Write the ten configuration bytes of an ExG chip and read them back
+
+        The setting is volatile: the device goes back to the configuration it stores
+        when it is switched off.
+
+        :param chip_id: The ID of the chip, one of [0, 1]
+        :param register: The configuration to write
+        :param verify: Raise an error if what the device reports afterwards differs
+            from what was written (the bits that belong to the device are not compared,
+            see :meth:`ExGRegister.same_configuration`)
+        :return: What the device reports after the write
+        :raises ShimmerError: If the device did not take the configuration
+        """
+        self.set_exg_register(chip_id, 0, register.binary)
+        back = self.get_exg_register(chip_id)
+        if verify and not register.same_configuration(back):
+            raise ShimmerError(
+                f"ExG chip {chip_id} did not take the configuration: wrote "
+                f"{fmt_hex(register.binary)}, it reports {fmt_hex(back.binary)}"
+            )
+        return back
 
     def get_device_name(self) -> str:
         """Retrieve the device name
