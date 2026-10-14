@@ -137,6 +137,19 @@ def calibrate_u12_adc_value(uncalibratedData, offset, vRefP, gain):
     return (uncalibratedData - offset) * ((vRefP / gain) / 4095)
 
 
+def battery_adc_to_voltage(adc_value):
+    """Convert the raw battery reading of the device to the battery voltage
+
+    The reading is a 12 bit value of a 3 V ADC behind a voltage divider of two (Shimmer
+    User Manual, equations 1 and 2; the factor is the one the devices were calibrated
+    with).
+
+    :param adc_value: The raw reading
+    :return: The battery voltage in Volt
+    """
+    return calibrate_u12_adc_value(adc_value, 0, 3.0, 1.0) * 1.988
+
+
 def battery_voltage_to_percent(battery_voltage):
     """Convert battery voltage to percent
 

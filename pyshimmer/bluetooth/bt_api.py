@@ -49,7 +49,8 @@ from pyshimmer.bluetooth.bt_commands import (
     GetDeviceNameCommand,
     SetDeviceNameCommand,
     DummyCommand,
-    GetBatteryCommand,
+    GetBatteryReadingCommand,
+    GetExpansionBoardCommand,
     SetSamplingRateCommand,
     SetSensorsCommand,
     SetStatusAckCommand,
@@ -69,6 +70,7 @@ from pyshimmer.bluetooth.bt_const import (
 from pyshimmer.bluetooth.bt_crc import CRC_OFF, CRC_2BYTE, crc16, crc_matches
 from pyshimmer.bluetooth.bt_errors import (
     CommandRefused,
+    ShimmerConfigurationError,
     ShimmerError,
     ShimmerLinkError,
     ShimmerTimeoutError,
@@ -77,8 +79,10 @@ from pyshimmer.bluetooth.bt_errors import (
 from pyshimmer.bluetooth.bt_lock import ConnectLock
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial, FrameView, IncompleteFrame
 from pyshimmer.dev.base import DEFAULT_BAUDRATE
+from pyshimmer.dev.battery import BatteryReading
 from pyshimmer.dev.channels import ChannelDataType, EChannelType, ESensorGroup
 from pyshimmer.dev.exg import ExGRegister, exg_data_rate_for_sampling_rate, is_exg_ch
+from pyshimmer.dev.expansion_board import ExpansionBoard
 from pyshimmer.dev.fw_version import (
     FirmwareType,
     FirmwareVersion,
@@ -1266,6 +1270,38 @@ class ShimmerBluetooth:
             except ShimmerTimeoutError:
                 pass
 
+    def set_crc(self, crc_len: int) -> None:
+        """Change the CRC mode of an initialized link
+
+        The mode is chosen with the ``crc`` argument when the link is created. This is for a caller that only
+        knows what the stream will be like after it has read the device (it may be too fast for the CRC bytes).
+        It must be called while the device is not streaming, because the packets of a stream are framed with the
+        mode in force when they were sent.
+
+        :param crc_len: The number of CRC bytes of every frame: 0, 1 or 2
+        :raises ValueError: If the length is not one of those, or the firmware has no CRC mode
+        :raises ShimmerError: If the device is streaming or did not confirm the mode (the previous mode is back)
+        """
+        if crc_len not in (CRC_OFF, 1, CRC_2BYTE):
+            raise ValueError(f"CRC length must be 0, 1 or 2, not {crc_len}")
+        if crc_len != CRC_OFF and not self.capabilities.supports_crc:
+            raise ValueError("This firmware has no CRC mode")
+        if self._streaming:
+            raise ShimmerError(
+                "The CRC mode cannot be changed while the device streams"
+            )
+
+        previous = self._bluetooth.crc_len
+        if crc_len == previous:
+            return
+        # The acknowledgment of this very command carries the CRC of the new mode: switch the receiver first
+        self._bluetooth.set_crc_len(crc_len)
+        try:
+            self._process_and_wait(SetCrcCommand(self._revision, crc_len))
+        except ShimmerError:
+            self._bluetooth.set_crc_len(previous)
+            raise
+
     def initialize(self) -> None:
         """Initialize the Bluetooth connection
 
@@ -1578,7 +1614,29 @@ class ShimmerBluetooth:
         :param in_percent: True: calculate battery state in percent; False: calculate battery state in Volt
         :return: The battery state in percent / Volt
         """
-        return self._process_and_wait(GetBatteryCommand(self._revision, in_percent))
+        # Both ask for the same response, and with the CRC mode the receiver decodes a response by its code
+        # (see response_parsers): they have to share the decoded result
+        reading = self.get_battery_reading()
+        return reading.percent if in_percent else reading.voltage
+
+    def get_battery_reading(self) -> BatteryReading:
+        """Retrieve the battery voltage, the capacity estimated from it and the
+        charging status
+
+        Unlike :meth:`get_battery_state` it returns the charging status byte of the
+        response as well. It can be called while the device streams; every in-stream
+        command costs a few data packets (about 5 at 2048 Hz).
+
+        :return: The reading of the battery
+        """
+        return self._process_and_wait(GetBatteryReadingCommand(self._revision))
+
+    def get_expansion_board(self) -> ExpansionBoard:
+        """Retrieve the identification of the expansion board under the Shimmer3
+
+        :return: The board: for the ECG and EMG units, ``board.has_exg`` is True
+        """
+        return self._process_and_wait(GetExpansionBoardCommand(self._revision))
 
     def get_config_time(self) -> int:
         """Get the config time from the device as configured in the configuration file
@@ -1664,6 +1722,31 @@ class ShimmerBluetooth:
         :param data: The data bytes to write
         """
         self._process_and_wait(SetEXGRegsCommand(self._revision, chip_id, offset, data))
+
+    def write_exg_register(
+        self, chip_id: int, register: ExGRegister, verify: bool = True
+    ) -> ExGRegister:
+        """Write the ten configuration bytes of an ExG chip and read them back
+
+        The setting is volatile: the device goes back to the configuration it stores
+        when it is switched off.
+
+        :param chip_id: The ID of the chip, one of [0, 1]
+        :param register: The configuration to write
+        :param verify: Raise an error if what the device reports afterwards differs
+            from what was written (the bits that belong to the device are not compared,
+            see :meth:`ExGRegister.same_configuration`)
+        :return: What the device reports after the write
+        :raises ShimmerConfigurationError: If the device did not take the configuration
+        """
+        self.set_exg_register(chip_id, 0, register.binary)
+        back = self.get_exg_register(chip_id)
+        if verify and not register.same_configuration(back):
+            raise ShimmerConfigurationError(
+                f"ExG chip {chip_id} did not take the configuration: wrote "
+                f"{fmt_hex(register.binary)}, it reports {fmt_hex(back.binary)}"
+            )
+        return back
 
     def get_device_name(self) -> str:
         """Retrieve the device name

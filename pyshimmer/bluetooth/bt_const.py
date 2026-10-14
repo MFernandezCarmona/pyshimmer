@@ -32,6 +32,11 @@ GET_BATTERY_COMMAND = 0x95
 BATTERY_RESPONSE = 0x94
 FULL_BATTERY_RESPONSE = bytes((INSTREAM_CMD_RESPONSE, BATTERY_RESPONSE))
 
+# The response of the expansion board command is: the code, the number of bytes that follow
+# (3) and the board id, its revision and its special revision
+GET_EXPANSION_BOARD_COMMAND = 0x66
+EXPANSION_BOARD_RESPONSE = 0x65
+
 START_STREAMING_COMMAND = 0x07
 # No response for command
 

@@ -21,6 +21,7 @@ from collections.abc import Iterable
 
 from pyshimmer.bluetooth.bt_const import *
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial
+from pyshimmer.dev.battery import BatteryReading
 from pyshimmer.dev.calibration import AllCalibration
 from pyshimmer.dev.channels import (
     ChannelDataType,
@@ -28,6 +29,7 @@ from pyshimmer.dev.channels import (
     ESensorGroup,
 )
 from pyshimmer.dev.exg import ExGRegister
+from pyshimmer.dev.expansion_board import ExpansionBoard
 from pyshimmer.dev.fw_version import FirmwareType
 from pyshimmer.dev.revisions import HardwareRevision, HardwareVersion
 from pyshimmer.util import (
@@ -35,6 +37,7 @@ from pyshimmer.util import (
     resp_code_to_bytes,
     calibrate_u12_adc_value,
     battery_voltage_to_percent,
+    battery_adc_to_voltage,
 )
 
 
@@ -308,12 +311,64 @@ class GetBatteryCommand(ResponseCommand):
         # Calculation see:
         # http://shimmersensing.com/wp-content/docs/support/documentation/LogAndStream_for_Shimmer3_Firmware_User_Manual_rev0.11a.pdf (Page 17)
         # https://shimmersensing.com/wp-content/docs/support/documentation/Shimmer_User_Manual_rev3p.pdf (Page 53)
-        raw_values = batt[1] * 256 + batt[0]
-        batt_voltage = calibrate_u12_adc_value(raw_values, 0, 3.0, 1.0) * 1.988
+        batt_voltage = battery_adc_to_voltage(batt[1] * 256 + batt[0])
         if self._in_percent:
             return battery_voltage_to_percent(batt_voltage)
         else:
             return batt_voltage
+
+
+class GetBatteryReadingCommand(ResponseCommand):
+
+    def __init__(self, rev: HardwareRevision):
+        """Retrieve the battery voltage, the capacity estimated from it and the charging
+        status
+
+        The device answers this command in the middle of a stream as well: it is one of
+        the in-stream commands of LogAndStream (each one costs a few data packets).
+
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, FULL_BATTERY_RESPONSE)
+
+    def send(self, ser: BluetoothSerial) -> None:
+        ser.write_command(GET_BATTERY_COMMAND)
+
+    def receive(self, ser: BluetoothSerial) -> any:
+        lsb, msb, status = ser.read_response(self.get_response_code(), arg_format="BBB")
+        voltage = battery_adc_to_voltage(msb * 256 + lsb)
+        return BatteryReading(voltage, battery_voltage_to_percent(voltage), status)
+
+
+class GetExpansionBoardCommand(ResponseCommand):
+
+    # The command takes the number of bytes it wants and the offset to read them from
+    _LENGTH = 3
+    _OFFSET = 0
+
+    def __init__(self, rev: HardwareRevision):
+        """Retrieve the identification of the expansion board under the Shimmer3
+
+        The expansion board is what holds the ExG chips of an ECG or EMG unit.
+
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, EXPANSION_BOARD_RESPONSE)
+
+    def send(self, ser: BluetoothSerial) -> None:
+        ser.write_command(GET_EXPANSION_BOARD_COMMAND, "BB", self._LENGTH, self._OFFSET)
+
+    def receive(self, ser: BluetoothSerial) -> any:
+        rlen = ser.read_response(EXPANSION_BOARD_RESPONSE, arg_format="B")
+        if rlen < self._LENGTH:
+            raise ValueError(
+                "Response does not contain the identification of the board"
+            )
+
+        board_id, revision, special = struct.unpack("BBB", ser.read(rlen)[:3])
+        return ExpansionBoard(board_id, revision, special)
 
 
 class GetConfigTimeCommand(ResponseCommand):
@@ -790,6 +845,7 @@ def response_parsers(rev: HardwareRevision) -> dict:
         bytes((CONFIGTIME_RESPONSE,)): lambda: GetConfigTimeCommand(rev),
         bytes((EXPID_RESPONSE,)): lambda: GetExperimentIDCommand(rev),
         bytes((SHIMMERNAME_RESPONSE,)): lambda: GetDeviceNameCommand(rev),
-        FULL_BATTERY_RESPONSE: lambda: GetBatteryCommand(rev, False),
+        FULL_BATTERY_RESPONSE: lambda: GetBatteryReadingCommand(rev),
+        bytes((EXPANSION_BOARD_RESPONSE,)): lambda: GetExpansionBoardCommand(rev),
         FULL_STATUS_RESPONSE: lambda: GetStatusCommand(rev),
     }

@@ -16,6 +16,7 @@
 
 from .bluetooth.bt_api import ShimmerBluetooth, CommandRefused
 from .bluetooth.bt_errors import (
+    ShimmerConfigurationError,
     ShimmerError,
     ShimmerLinkError,
     ShimmerTimeoutError,
@@ -24,8 +25,10 @@ from .bluetooth.bt_errors import (
 from .bluetooth.bt_lock import ConnectLock
 from .bluetooth.bt_commands import DataPacket
 from .dev.base import DEFAULT_BAUDRATE
+from .dev.battery import BatteryReading, ChargingStatus
 from .dev.channels import ChannelDataType, EChannelType, ESensorGroup
 from .dev.exg import ExGMux, ExGRLDLead, ERLDRef, ExGRegister
+from .dev.expansion_board import ExpansionBoard
 from .dev.fw_version import FirmwareType, FirmwareVersion
 from .dev.revisions import (
     HardwareRevision,

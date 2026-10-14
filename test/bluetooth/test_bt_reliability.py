@@ -34,6 +34,7 @@ from pyshimmer.bluetooth.bt_commands import (
 from pyshimmer.bluetooth.bt_crc import crc16, crc_matches
 from pyshimmer.bluetooth.bt_errors import (
     CommandRefused,
+    ShimmerConfigurationError,
     ShimmerConnectError,
     ShimmerError,
     ShimmerLinkError,
@@ -41,7 +42,9 @@ from pyshimmer.bluetooth.bt_errors import (
 )
 from pyshimmer.bluetooth.bt_lock import ConnectLock
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial
+from pyshimmer.dev.battery import ChargingStatus
 from pyshimmer.dev.channels import EChannelType
+from pyshimmer.dev.exg import ExGRegister
 from pyshimmer.dev.revisions import HardwareVersion, RevisionRegistry
 from test.bluetooth.fake_device import FakeDevice
 
@@ -798,6 +801,177 @@ class ExGConfigurationTest(_ApiTestCase):
         pd, dev = self.make(device_kwargs={"sampling_dr": 16})
         dev.start_streaming(check_exg=False)
         self.assertNotIn(0x63, [c for c, _ in pd.device.commands])
+
+
+class WriteExGRegisterTest(_ApiTestCase):
+    """Writing a whole configuration to a chip and checking what it took"""
+
+    def test_the_whole_configuration_is_written_and_read_back(self):
+        pd, dev = self.make()
+        wanted = ExGRegister.emg_preset(rate_sps=4000, gain=6)
+
+        back = dev.write_exg_register(0, wanted)
+
+        self.assertEqual(bytes(pd.device.exg_regs), wanted.binary)
+        self.assertEqual(back, wanted)
+        # a single write of the ten bytes, and one read after it
+        codes = [c for c, _ in pd.device.commands if c in (0x61, 0x63)]
+        self.assertEqual(codes, [0x61, 0x63])
+
+    @staticmethod
+    def acknowledge_without_storing(pd) -> None:
+        """Make the device acknowledge the ExG write and keep the registers it had"""
+        original = pd.device._handle
+
+        def handle(code, args):
+            if code == 0x61:
+                pd.device._write(pd.device._reply())
+            else:
+                original(code, args)
+
+        pd.device._handle = handle
+
+    def test_a_chip_that_took_something_else_is_reported(self):
+        pd, dev = self.make()
+        self.acknowledge_without_storing(pd)
+
+        with self.assertRaises(ShimmerConfigurationError) as ctx:
+            dev.write_exg_register(0, ExGRegister.emg_preset(rate_sps=4000))
+        self.assertIn("did not take the configuration", str(ctx.exception))
+
+    def test_a_refusal_is_reported(self):
+        pd, dev = self.make()
+        pd.device.refuse.add(0x61)  # the device answers NACK
+
+        with self.assertRaises(CommandRefused):
+            dev.write_exg_register(0, ExGRegister.emg_preset(rate_sps=4000))
+
+    def test_a_device_that_changes_a_bit_it_owns_is_not_an_error(self):
+        pd, dev = self.make()
+        wanted = ExGRegister.emg_preset(rate_sps=4000)
+
+        original_handle = pd.device._handle
+
+        def handle(code, args):
+            original_handle(code, args)
+            if code == 0x61:
+                pd.device.exg_regs[1] &= ~0x08  # the firmware clears the board bit
+                pd.device.exg_regs[7] = 0x0F  # and a status register shows lead-off
+
+        pd.device._handle = handle
+        back = dev.write_exg_register(0, wanted)
+
+        self.assertEqual(back.binary[1], wanted.binary[1] & ~0x08)
+
+    def test_a_mismatch_can_be_accepted_when_not_verifying(self):
+        pd, dev = self.make()
+        self.acknowledge_without_storing(pd)
+
+        wanted = ExGRegister.emg_preset(rate_sps=125)  # not what the device holds
+
+        back = dev.write_exg_register(0, wanted, verify=False)
+
+        self.assertNotEqual(back, wanted)
+
+
+class DeviceInformationTest(_ApiTestCase):
+    """What the node reads before it configures a device"""
+
+    def test_the_expansion_board(self):
+        pd, dev = self.make()
+        board = dev.get_expansion_board()
+        self.assertEqual(str(board), "ExG (SR47-4.0)")
+        self.assertTrue(board.has_exg)
+
+    def test_the_battery_with_its_charging_status(self):
+        pd, dev = self.make()
+        pd.device.battery_adc = 0x0B2E
+        pd.device.charging = 0x40
+
+        reading = dev.get_battery_reading()
+
+        self.assertAlmostEqual(reading.voltage, 4.168246153846154)
+        self.assertEqual(reading.charging_status, ChargingStatus.FULLY_CHARGED)
+
+    def test_the_battery_reading_is_the_same_object_in_the_crc_mode(self):
+        # with the CRC the receiver decodes a response by its code: asking in two ways must not give two types
+        pd, dev = self.make(crc="auto")
+        self.assertEqual(dev.crc_len, 2)
+        pd.device.battery_adc = 0x0B2E
+        pd.device.charging = 0x80
+
+        reading = dev.get_battery_reading()
+
+        self.assertAlmostEqual(reading.voltage, 4.168246153846154)
+        self.assertEqual(reading.charging_status, ChargingStatus.PRECONDITIONING)
+        self.assertAlmostEqual(dev.get_battery_state(False), 4.168246153846154)
+        self.assertEqual(dev.get_battery_state(True), reading.percent)
+
+    def test_the_battery_state_is_the_voltage_or_the_percent_without_the_crc_too(self):
+        pd, dev = self.make(crc="off")
+        pd.device.battery_adc = 0x0B2E
+        self.assertAlmostEqual(dev.get_battery_state(False), 4.168246153846154)
+        self.assertEqual(dev.get_battery_state(True), 100)
+
+    def test_the_battery_can_be_read_while_streaming(self):
+        pd, dev = self.make()
+        got = self.start_stream(dev)
+        self.assertTrue(self.wait_for(lambda: len(got) > 5))
+
+        reading = dev.get_battery_reading()
+
+        self.assertGreater(reading.voltage, 0)
+        self.assertTrue(self.wait_for(lambda: len(got) > 20))
+        dev.stop_streaming()
+
+
+class ChangeCrcModeTest(_ApiTestCase):
+    """The CRC mode of a link that is already up"""
+
+    def test_the_mode_can_be_dropped_and_restored_and_the_commands_keep_working(self):
+        pd, dev = self.make(crc="auto")
+        self.assertEqual(dev.crc_len, 2)
+
+        dev.set_crc(0)
+        self.assertEqual(dev.crc_len, 0)
+        self.assertEqual(pd.device.crc_len, 0)
+        self.assertEqual(dev.get_sampling_rate(), 512.0)
+
+        dev.set_crc(2)
+        self.assertEqual((dev.crc_len, pd.device.crc_len), (2, 2))
+        self.assertEqual(dev.get_sampling_rate(), 512.0)
+
+        got = self.start_stream(dev)
+        self.assertTrue(self.wait_for(lambda: len(got) > 20))
+        self.assertEqual(dev.link_stats["crc_errors"], 0)
+
+    def test_the_same_mode_sends_nothing(self):
+        pd, dev = self.make(crc="auto")
+        before = [c for c, _ in pd.device.commands].count(0x8B)
+        dev.set_crc(2)
+        self.assertEqual([c for c, _ in pd.device.commands].count(0x8B), before)
+
+    def test_it_is_refused_while_streaming_and_with_a_wrong_length(self):
+        pd, dev = self.make(crc="auto")
+        with self.assertRaises(ValueError):
+            dev.set_crc(3)
+        self.start_stream(dev)
+        with self.assertRaises(ShimmerError):
+            dev.set_crc(0)
+        self.assertEqual(dev.crc_len, 2)
+
+    def test_a_firmware_without_the_mode_refuses_it(self):
+        pd, dev = self.make(device_kwargs={"fw": (3, 0, 11, 0)}, crc="auto")
+        with self.assertRaises(ValueError):
+            dev.set_crc(2)
+        dev.set_crc(0)  # already off: nothing to do
+
+    def test_a_device_that_does_not_answer_leaves_the_previous_mode(self):
+        pd, dev = self.make(crc="auto", command_timeout=0.3)
+        pd.device.ignore.add(0x8B)
+        with self.assertRaises(ShimmerError):
+            dev.set_crc(0)
+        self.assertEqual(dev.crc_len, 2)
 
 
 class ThroughputWarningTest(_ApiTestCase):

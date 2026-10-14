@@ -43,6 +43,7 @@ _ARGS = {
     0x2E: 0,
     0x3F: 0,
     0x63: 3,
+    0x66: 2,
     0x72: 0,
     0x8B: 1,
     0x8F: 8,
@@ -88,6 +89,13 @@ class FakeDevice:
         )
         self.commands = []
         self.exg_regs = bytearray(b"\x04\xa8\x10\x69\x60\x20\x00\x00\x02\x03")
+        self.expansion_board = (
+            47,
+            4,
+            0,
+        )  # what the expansion board command reports: id, revision, special
+        self.battery_adc = 0x0E10  # the raw reading the battery command reports
+        self.charging = 0x00  # and its charging status byte
         self.sent_packets = 0
 
         self._seq = 0
@@ -267,7 +275,10 @@ class FakeDevice:
             self.exg_regs[off : off + ln] = a[3 : 3 + ln]
             self._write(self._reply())
         elif code == 0x95:
-            self._write(self._reply(b"\x8a\x94\x10\x0e\x00"))
+            adc = struct.pack("<H", self.battery_adc)
+            self._write(self._reply(b"\x8a\x94" + adc + bytes((self.charging,))))
+        elif code == 0x66:
+            self._write(self._reply(b"\x65\x03" + bytes(self.expansion_board)))
         else:  # set commands, dummy, ack-disable...: only acknowledged
             self._write(self._reply())
 
