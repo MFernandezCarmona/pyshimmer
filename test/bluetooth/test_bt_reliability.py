@@ -893,6 +893,26 @@ class DeviceInformationTest(_ApiTestCase):
         self.assertAlmostEqual(reading.voltage, 4.168246153846154)
         self.assertEqual(reading.charging_status, ChargingStatus.FULLY_CHARGED)
 
+    def test_the_battery_reading_is_the_same_object_in_the_crc_mode(self):
+        # with the CRC the receiver decodes a response by its code: asking in two ways must not give two types
+        pd, dev = self.make(crc="auto")
+        self.assertEqual(dev.crc_len, 2)
+        pd.device.battery_adc = 0x0B2E
+        pd.device.charging = 0x80
+
+        reading = dev.get_battery_reading()
+
+        self.assertAlmostEqual(reading.voltage, 4.168246153846154)
+        self.assertEqual(reading.charging_status, ChargingStatus.PRECONDITIONING)
+        self.assertAlmostEqual(dev.get_battery_state(False), 4.168246153846154)
+        self.assertEqual(dev.get_battery_state(True), reading.percent)
+
+    def test_the_battery_state_is_the_voltage_or_the_percent_without_the_crc_too(self):
+        pd, dev = self.make(crc="off")
+        pd.device.battery_adc = 0x0B2E
+        self.assertAlmostEqual(dev.get_battery_state(False), 4.168246153846154)
+        self.assertEqual(dev.get_battery_state(True), 100)
+
     def test_the_battery_can_be_read_while_streaming(self):
         pd, dev = self.make()
         got = self.start_stream(dev)

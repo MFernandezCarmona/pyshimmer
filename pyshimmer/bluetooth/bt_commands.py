@@ -845,7 +845,7 @@ def response_parsers(rev: HardwareRevision) -> dict:
         bytes((CONFIGTIME_RESPONSE,)): lambda: GetConfigTimeCommand(rev),
         bytes((EXPID_RESPONSE,)): lambda: GetExperimentIDCommand(rev),
         bytes((SHIMMERNAME_RESPONSE,)): lambda: GetDeviceNameCommand(rev),
-        FULL_BATTERY_RESPONSE: lambda: GetBatteryCommand(rev, False),
+        FULL_BATTERY_RESPONSE: lambda: GetBatteryReadingCommand(rev),
         bytes((EXPANSION_BOARD_RESPONSE,)): lambda: GetExpansionBoardCommand(rev),
         FULL_STATUS_RESPONSE: lambda: GetStatusCommand(rev),
     }

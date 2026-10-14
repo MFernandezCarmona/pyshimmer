@@ -49,7 +49,6 @@ from pyshimmer.bluetooth.bt_commands import (
     GetDeviceNameCommand,
     SetDeviceNameCommand,
     DummyCommand,
-    GetBatteryCommand,
     GetBatteryReadingCommand,
     GetExpansionBoardCommand,
     SetSamplingRateCommand,
@@ -1583,7 +1582,10 @@ class ShimmerBluetooth:
         :param in_percent: True: calculate battery state in percent; False: calculate battery state in Volt
         :return: The battery state in percent / Volt
         """
-        return self._process_and_wait(GetBatteryCommand(self._revision, in_percent))
+        # Both ask for the same response, and with the CRC mode the receiver decodes a response by its code
+        # (see response_parsers): they have to share the decoded result
+        reading = self.get_battery_reading()
+        return reading.percent if in_percent else reading.voltage
 
     def get_battery_reading(self) -> BatteryReading:
         """Retrieve the battery voltage, the capacity estimated from it and the
