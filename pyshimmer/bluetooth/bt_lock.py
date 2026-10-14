@@ -66,7 +66,9 @@ class ConnectLock:
                 if time.monotonic() > deadline:
                     os.close(self._fd)
                     self._fd = None
-                    raise ShimmerConnectError(f'Could not take the connect lock {self._path} in {self._timeout} s')
+                    raise ShimmerConnectError(
+                        f"Could not take the connect lock {self._path} in {self._timeout} s"
+                    )
                 time.sleep(0.05)
 
         if self._min_interval > 0:
@@ -80,7 +82,7 @@ class ConnectLock:
     def _read_release_time(self) -> float:
         try:
             raw = os.pread(self._fd, 64, 0)
-            return float(raw.decode('ascii').strip() or 0)
+            return float(raw.decode("ascii").strip() or 0)
         except (OSError, ValueError):
             return 0.0
 
@@ -90,7 +92,7 @@ class ConnectLock:
 
         try:
             os.ftruncate(self._fd, 0)
-            os.pwrite(self._fd, f'{time.time():.3f}'.encode('ascii'), 0)
+            os.pwrite(self._fd, f"{time.time():.3f}".encode("ascii"), 0)
             fcntl.flock(self._fd, fcntl.LOCK_UN)
         finally:
             os.close(self._fd)

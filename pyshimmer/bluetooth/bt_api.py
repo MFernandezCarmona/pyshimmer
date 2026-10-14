@@ -102,7 +102,15 @@ _VALID_HEADERS = (
 # response (whose first byte is a response code) from an acknowledgment that stands alone.
 _ACK_ONLY_CRC = crc16(bytes((ACK_COMMAND_PROCESSED,)))
 # Everything a speculative decode of garbage can raise
-_PARSE_ERRORS = (ValueError, RuntimeError, struct.error, KeyError, IndexError, UnicodeError, OverflowError)
+_PARSE_ERRORS = (
+    ValueError,
+    RuntimeError,
+    struct.error,
+    KeyError,
+    IndexError,
+    UnicodeError,
+    OverflowError,
+)
 
 
 class RequestCompletion:
@@ -148,11 +156,11 @@ class RequestCompletion:
         :raises CommandRefused: If the device refused the command
         """
         if not self.__event.wait(timeout):
-            raise ShimmerTimeoutError('No acknowledgment received')
+            raise ShimmerTimeoutError("No acknowledgment received")
         if self.__error is not None:
             raise self.__error
         if self.__refused:
-            raise CommandRefused('The Shimmer refused the command')
+            raise CommandRefused("The Shimmer refused the command")
 
 
 class RequestResponse:
@@ -199,20 +207,33 @@ class RequestResponse:
         :raises CommandRefused: If the device refused the command
         """
         if not self.__event.wait(timeout):
-            raise ShimmerTimeoutError('No response received')
+            raise ShimmerTimeoutError("No response received")
         if self.__error is not None:
             raise self.__error
         if self.__refused:
-            raise CommandRefused('The Shimmer refused the command')
+            raise CommandRefused("The Shimmer refused the command")
         return self.get_result()
 
 
 class LinkStats:
     """Counters of what the receiving side of the link has seen. All fields are monotonically increasing."""
 
-    FIELDS = ('data_packets', 'acks', 'nacks', 'responses', 'status_updates',
-              'skipped_bytes', 'unexpected_acks', 'unexpected_nacks', 'late_responses',
-              'crc_errors', 'framing_errors', 'parse_errors', 'callback_errors', 'timeouts')
+    FIELDS = (
+        "data_packets",
+        "acks",
+        "nacks",
+        "responses",
+        "status_updates",
+        "skipped_bytes",
+        "unexpected_acks",
+        "unexpected_nacks",
+        "late_responses",
+        "crc_errors",
+        "framing_errors",
+        "parse_errors",
+        "callback_errors",
+        "timeouts",
+    )
 
     def __init__(self):
         for f in self.FIELDS:
@@ -228,9 +249,15 @@ class _BadFrame(Exception):
 
 class _Pending:
     """A command that has been sent and whose acknowledgment and/or response is still outstanding"""
-    __slots__ = ('cmd', 'compl', 'resp', 'acked')
 
-    def __init__(self, cmd: ShimmerCommand, compl: RequestCompletion, resp: RequestResponse | None):
+    __slots__ = ("cmd", "compl", "resp", "acked")
+
+    def __init__(
+        self,
+        cmd: ShimmerCommand,
+        compl: RequestCompletion,
+        resp: RequestResponse | None,
+    ):
         self.cmd = cmd
         self.compl = compl
         self.resp = resp
@@ -262,9 +289,16 @@ class BluetoothRequestHandler:
     :arg lookahead_timeout: How long to wait for the byte after a data packet before delivering it unchecked
     """
 
-    def __init__(self, serial: BluetoothSerial, revision: HardwareRevision, tolerant: bool = False,
-                 crc_len: int = CRC_OFF, lookahead: bool = True, frame_timeout: float = 0.5,
-                 lookahead_timeout: float = 0.25):
+    def __init__(
+        self,
+        serial: BluetoothSerial,
+        revision: HardwareRevision,
+        tolerant: bool = False,
+        crc_len: int = CRC_OFF,
+        lookahead: bool = True,
+        frame_timeout: float = 0.5,
+        lookahead_timeout: float = 0.25,
+    ):
         self._serial = serial
         self._rev = revision
         self._tolerant = tolerant
@@ -273,15 +307,17 @@ class BluetoothRequestHandler:
         self._frame_timeout = frame_timeout
         self._lookahead_timeout = lookahead_timeout
 
-        self._lock = threading.Lock()       # protects _pending
-        self._send_lock = threading.Lock()  # keeps the order of _pending equal to the order on the wire
+        self._lock = threading.Lock()  # protects _pending
+        self._send_lock = (
+            threading.Lock()
+        )  # keeps the order of _pending equal to the order on the wire
         self._pending: list[_Pending] = []
         self._failure: BaseException | None = None
         self._parsers = response_parsers(revision)
 
         self._stream_types = []
         self._payload_len = 0
-        self._ts_first = False          # the first channel is the 3-byte device timestamp
+        self._ts_first = False  # the first channel is the 3-byte device timestamp
         self._period_ticks: float | None = None
         self._last_ts: int | None = None
         self._reject_streak = 0
@@ -289,7 +325,7 @@ class BluetoothRequestHandler:
         self._status_cbs = []
 
         self.stats = LinkStats()
-        self.last_rx = time.monotonic()    # last time any frame was processed
+        self.last_rx = time.monotonic()  # last time any frame was processed
         self.last_data = time.monotonic()  # last time a data packet was delivered
 
     # ------------------------------------------------------------------------------------------ configuration
@@ -310,11 +346,16 @@ class BluetoothRequestHandler:
         return self._stream_types
 
     @stream_types.setter
-    def stream_types(self, types: Iterable[tuple[EChannelType, ChannelDataType]]) -> None:
+    def stream_types(
+        self, types: Iterable[tuple[EChannelType, ChannelDataType]]
+    ) -> None:
         self.set_stream_types(list(types))
 
-    def set_stream_types(self, types: list[tuple[EChannelType, ChannelDataType]],
-                         period_ticks: float | None = None) -> None:
+    def set_stream_types(
+        self,
+        types: list[tuple[EChannelType, ChannelDataType]],
+        period_ticks: float | None = None,
+    ) -> None:
         """Set the channel types that are streamed as part of the data packets
 
         :param types: A List of tuples, each containing a channel type and its corresponding data type
@@ -323,7 +364,11 @@ class BluetoothRequestHandler:
         """
         self._stream_types = types
         self._payload_len = sum(dtype.size for _, dtype in types)
-        self._ts_first = bool(types) and types[0][0] == EChannelType.TIMESTAMP and types[0][1].size == 3
+        self._ts_first = (
+            bool(types)
+            and types[0][0] == EChannelType.TIMESTAMP
+            and types[0][1].size == 3
+        )
         self._period_ticks = period_ticks
         self._last_ts = None
         self._reject_streak = 0
@@ -335,7 +380,7 @@ class BluetoothRequestHandler:
         acknowledgment of that command already carries the CRC of the new mode.
         """
         if crc_len not in (0, 1, 2):
-            raise ValueError(f'CRC length must be 0, 1 or 2, not {crc_len}')
+            raise ValueError(f"CRC length must be 0, 1 or 2, not {crc_len}")
         self._crc_len = crc_len
 
     @property
@@ -397,7 +442,9 @@ class BluetoothRequestHandler:
         except ValueError:
             pass
 
-    def queue_command(self, cmd: ShimmerCommand) -> tuple[RequestCompletion, RequestResponse]:
+    def queue_command(
+        self, cmd: ShimmerCommand
+    ) -> tuple[RequestCompletion, RequestResponse]:
         """Queue a command request for processing
 
         :param cmd: The command to send to the Shimmer device
@@ -411,7 +458,9 @@ class BluetoothRequestHandler:
 
         with self._send_lock:
             if self._failure is not None:
-                raise ShimmerLinkError(f'The link has failed: {self._failure}') from self._failure
+                raise ShimmerLinkError(
+                    f"The link has failed: {self._failure}"
+                ) from self._failure
 
             with self._lock:
                 self._pending.append(entry)
@@ -436,9 +485,7 @@ class BluetoothRequestHandler:
                     self._remove(e)
 
     def clear_queues(self) -> None:
-        """Clear the internal queues and release any locks held by other threads
-
-        """
+        """Clear the internal queues and release any locks held by other threads"""
         with self._lock:
             pending, self._pending = self._pending, []
 
@@ -449,7 +496,9 @@ class BluetoothRequestHandler:
 
     def fail_all(self, error: BaseException) -> None:
         """Fail every outstanding request with the error and reject all later ones"""
-        self._failure = error  # a plain assignment: must not wait for a writer that may be blocked
+        self._failure = (
+            error  # a plain assignment: must not wait for a writer that may be blocked
+        )
         with self._lock:
             pending, self._pending = self._pending, []
 
@@ -472,7 +521,9 @@ class BluetoothRequestHandler:
             if self._tolerant:
                 self.stats.unexpected_acks += 1
                 return
-            raise ShimmerError('Received an acknowledgment, but no command is waiting for one')
+            raise ShimmerError(
+                "Received an acknowledgment, but no command is waiting for one"
+            )
 
         self.stats.acks += 1
         entry.compl.set_completed()
@@ -496,11 +547,19 @@ class BluetoothRequestHandler:
 
             try:
                 cb(packet)
-            except Exception as e:  # noqa: BLE001 - a bug in user code must not take the link down
+            except (
+                Exception
+            ) as e:  # noqa: BLE001 - a bug in user code must not take the link down
                 self.stats.callback_errors += 1
                 n = self.stats.callback_errors
                 if n <= 3 or n % 1000 == 0:
-                    _log.error('Stream callback %r raised (%d so far): %r', cb, n, e, exc_info=e)
+                    _log.error(
+                        "Stream callback %r raised (%d so far): %r",
+                        cb,
+                        n,
+                        e,
+                        exc_info=e,
+                    )
 
     def _process_in_stream_resp(self):
         peek = self._serial.peek(len(FULL_STATUS_RESPONSE))
@@ -542,14 +601,18 @@ class BluetoothRequestHandler:
         with self._lock:
             entry = self._first_awaiting()
             if entry is None:
-                raise ShimmerError('Received a response, but no command is waiting for one')
+                raise ShimmerError(
+                    "Received a response, but no command is waiting for one"
+                )
             self._remove(entry)
 
         resp_code = entry.cmd.get_response_code()
         peek = self._serial.peek(len(resp_code))
 
         if peek != resp_code:
-            raise ValueError(f'Expecting response code {fmt_hex(resp_code)} but found {fmt_hex(peek)}')
+            raise ValueError(
+                f"Expecting response code {fmt_hex(resp_code)} but found {fmt_hex(peek)}"
+            )
 
         result = entry.cmd.receive(self._serial)
         self.stats.responses += 1
@@ -619,7 +682,7 @@ class BluetoothRequestHandler:
 
         n = 1 + self._payload_len
         buf = view.read(n + self._crc_len)
-        ts = int.from_bytes(buf[1:4], 'little') if self._ts_first else None
+        ts = int.from_bytes(buf[1:4], "little") if self._ts_first else None
 
         if self._crc_len:
             if not crc_matches(buf[:n], buf[n:], self._crc_len):
@@ -644,22 +707,27 @@ class BluetoothRequestHandler:
     def _validate_plain(self, view: FrameView, ts: int | None) -> None:
         """Without CRC a packet is accepted when it looks like part of the stream: a valid header follows it
         and its timestamp continues the previous one. While there is no reference timestamp (start of the
-        stream, after a resynchronization) the next packet must continue this one as well."""
+        stream, after a resynchronization) the next packet must continue this one as well.
+        """
         nxt = None
         if self._lookahead:
-            nxt = view.peek_if_available(4 if ts is not None else 1, self._lookahead_timeout)
+            nxt = view.peek_if_available(
+                4 if ts is not None else 1, self._lookahead_timeout
+            )
 
         problem = None
         if nxt is not None and nxt[0] not in _VALID_HEADERS:
-            problem = 'framing'
+            problem = "framing"
         elif ts is not None:
             if self._last_ts is not None:
                 if not self._delta_ok(ts, self._last_ts):
-                    problem = 'timestamp'
+                    problem = "timestamp"
             elif nxt is not None and nxt[0] == DATA_PACKET and len(nxt) >= 4:
                 # Acquiring the stream: the very next packet must follow this one, no packets missing in between
-                if not self._delta_ok(int.from_bytes(nxt[1:4], 'little'), ts, max_packets=1):
-                    problem = 'timestamp'
+                if not self._delta_ok(
+                    int.from_bytes(nxt[1:4], "little"), ts, max_packets=1
+                ):
+                    problem = "timestamp"
 
         if problem is None:
             return
@@ -769,7 +837,7 @@ class BluetoothRequestHandler:
                 cb(status)
             except Exception as e:  # noqa: BLE001
                 self.stats.callback_errors += 1
-                _log.error('Status callback %r raised: %r', cb, e, exc_info=e)
+                _log.error("Status callback %r raised: %r", cb, e, exc_info=e)
 
     # ---- with CRC: every reply is one frame, ``ack [| response] | crc``
     def _parse_frame_crc(self, view: FrameView, head: int):
@@ -807,7 +875,9 @@ class BluetoothRequestHandler:
         nxt = view.peek(1)[0]
         attempts = []
         if nxt != _ACK_ONLY_CRC[0]:
-            code = bytes(view.peek(2)) if nxt == INSTREAM_CMD_RESPONSE else bytes((nxt,))
+            code = (
+                bytes(view.peek(2)) if nxt == INSTREAM_CMD_RESPONSE else bytes((nxt,))
+            )
             if code in self._parsers:
                 attempts.append(code)
         attempts.append(None)  # a lone acknowledgment
@@ -878,7 +948,7 @@ class BluetoothRequestHandler:
         if self._tolerant:
             self._process_tolerant()
         else:
-            peek = self._serial.peek_packed('B')
+            peek = self._serial.peek_packed("B")
 
             if peek == ACK_COMMAND_PROCESSED:
                 self._process_ack()
@@ -897,14 +967,20 @@ class BluetoothRequestHandler:
 class ShimmerBluetooth:
     _CRC_THROUGHPUT_WARNING = 24000.0  # bytes per second
 
-    def __init__(self, serial: Serial, revision: HardwareRevision | None = None, disable_status_ack: bool = True,
-                 *, command_timeout: float | None = 5.0,
-                 stall_timeout: float | None = 3.0,
-                 start_timeout: float = 10.0,
-                 crc: str | int | None = 'auto',
-                 presync: bool = True,
-                 tolerant: bool = True,
-                 lookahead: bool = True):
+    def __init__(
+        self,
+        serial: Serial,
+        revision: HardwareRevision | None = None,
+        disable_status_ack: bool = True,
+        *,
+        command_timeout: float | None = 5.0,
+        stall_timeout: float | None = 3.0,
+        start_timeout: float = 10.0,
+        crc: str | int | None = "auto",
+        presync: bool = True,
+        tolerant: bool = True,
+        lookahead: bool = True,
+    ):
         """API for communicating with the Shimmer via Bluetooth
 
         This class implements support for talking to the Shimmer LogAndStream firmware via Bluetooth.
@@ -943,9 +1019,9 @@ class ShimmerBluetooth:
         :param lookahead: Without CRC, validate each data packet by looking at the byte after it, at the price
             of delaying every packet by one sampling period
         """
-        if crc in (None, False, 'off', 0):
+        if crc in (None, False, "off", 0):
             self._crc_request = CRC_OFF
-        elif crc in ('auto', True):
+        elif crc in ("auto", True):
             self._crc_request = CRC_2BYTE
         elif crc in (1, 2):
             self._crc_request = int(crc)
@@ -963,11 +1039,16 @@ class ShimmerBluetooth:
 
         self._raw_serial = serial
         self._serial = BluetoothSerial(serial)
-        self._bluetooth = BluetoothRequestHandler(self._serial, self._revision, tolerant=tolerant,
-                                                  lookahead=lookahead)
+        self._bluetooth = BluetoothRequestHandler(
+            self._serial, self._revision, tolerant=tolerant, lookahead=lookahead
+        )
 
-        self._thread = Thread(target=self._run_readloop, daemon=True, name='pyshimmer-read')
-        self._watchdog = Thread(target=self._run_watchdog, daemon=True, name='pyshimmer-watchdog')
+        self._thread = Thread(
+            target=self._run_readloop, daemon=True, name="pyshimmer-read"
+        )
+        self._watchdog = Thread(
+            target=self._run_watchdog, daemon=True, name="pyshimmer-watchdog"
+        )
         self._stop_watchdog = Event()
 
         self._initialized = False
@@ -1097,13 +1178,13 @@ class ShimmerBluetooth:
                 return
             self._error = error
 
-        _log.error('The link to the Shimmer failed: %s', error)
+        _log.error("The link to the Shimmer failed: %s", error)
         self._bluetooth.fail_all(error)
         for cb in list(self._error_cbs):
             try:
                 cb(error)
             except Exception:  # noqa: BLE001
-                _log.exception('Error callback %r raised', cb)
+                _log.exception("Error callback %r raised", cb)
 
     # ------------------------------------------------------------------------------------------- lifecycle
     def _set_fw_capabilities(self) -> None:
@@ -1116,7 +1197,7 @@ class ShimmerBluetooth:
         except (ShimmerTimeoutError, CommandRefused):
             # A firmware that does not answer must not keep us from connecting: the device is taken for a
             # Shimmer3 unless it says otherwise
-            _log.warning('The device did not report its hardware version')
+            _log.warning("The device did not report its hardware version")
 
         self._hw_version = reported if reported is not None else HardwareVersion.UNKNOWN
 
@@ -1133,7 +1214,7 @@ class ShimmerBluetooth:
         known layout yet and could not be framed.
         """
         ser = self._raw_serial
-        old_timeout = getattr(ser, 'timeout', None)
+        old_timeout = getattr(ser, "timeout", None)
         t0 = time.monotonic()
         quiet, first_reply_budget, give_up = 0.4, 3.0, t0 + 10.0
         try:
@@ -1151,11 +1232,15 @@ class ShimmerBluetooth:
                 elif not heard and now - t0 >= first_reply_budget:
                     break  # a silent device: nothing to drain (the first command after a cold connect takes ~1.5 s)
                 if now > give_up:
-                    raise ShimmerLinkError('The device keeps sending data after STOP_STREAMING')
+                    raise ShimmerLinkError(
+                        "The device keeps sending data after STOP_STREAMING"
+                    )
 
             ser.reset_input_buffer()
         except (SerialException, OSError) as e:
-            raise ShimmerLinkError(f'The serial port failed while synchronizing: {e!r}') from e
+            raise ShimmerLinkError(
+                f"The serial port failed while synchronizing: {e!r}"
+            ) from e
         finally:
             try:
                 ser.timeout = old_timeout
@@ -1172,7 +1257,9 @@ class ShimmerBluetooth:
         try:
             self._process_and_wait(SetCrcCommand(self._revision, crc_len))
         except ShimmerTimeoutError:
-            _log.warning('The device did not confirm the CRC mode, continuing without CRC')
+            _log.warning(
+                "The device did not confirm the CRC mode, continuing without CRC"
+            )
             self._bluetooth.set_crc_len(CRC_OFF)
             try:
                 self._process_and_wait(SetCrcCommand(self._revision, CRC_OFF))
@@ -1232,10 +1319,20 @@ class ShimmerBluetooth:
         self._bluetooth.clear_queues()
 
     @classmethod
-    def connect(cls, port: str, *, baudrate: int = DEFAULT_BAUDRATE, retries: int = 3, retry_delay: float = 0.3,
-                lock_path: str | None = None, lock_timeout: float = 60.0, min_connect_interval: float = 0.0,
-                serial_factory: Callable[[str, int], Serial] | None = None,
-                on_retry: Callable[[int, BaseException], None] | None = None, **kwargs) -> ShimmerBluetooth:
+    def connect(
+        cls,
+        port: str,
+        *,
+        baudrate: int = DEFAULT_BAUDRATE,
+        retries: int = 3,
+        retry_delay: float = 0.3,
+        lock_path: str | None = None,
+        lock_timeout: float = 60.0,
+        min_connect_interval: float = 0.0,
+        serial_factory: Callable[[str, int], Serial] | None = None,
+        on_retry: Callable[[int, BaseException], None] | None = None,
+        **kwargs,
+    ) -> ShimmerBluetooth:
         """Open the port and initialize the device, retrying when the connection fails
 
         Opening a Bluetooth serial port can fail transiently: a Shimmer that has not been connected for a while
@@ -1262,7 +1359,11 @@ class ShimmerBluetooth:
         for attempt in range(retries + 1):
             ser = None
             try:
-                guard = ConnectLock(lock_path, lock_timeout, min_connect_interval) if lock_path else nullcontext()
+                guard = (
+                    ConnectLock(lock_path, lock_timeout, min_connect_interval)
+                    if lock_path
+                    else nullcontext()
+                )
                 with guard:
                     ser = factory(port, baudrate)
                     dev = cls(ser, **kwargs)
@@ -1272,7 +1373,13 @@ class ShimmerBluetooth:
                 raise
             except (ShimmerError, SerialException, OSError) as e:
                 last = e
-                _log.warning('Connection attempt %d/%d to %s failed: %r', attempt + 1, retries + 1, port, e)
+                _log.warning(
+                    "Connection attempt %d/%d to %s failed: %r",
+                    attempt + 1,
+                    retries + 1,
+                    port,
+                    e,
+                )
                 if ser is not None:
                     try:
                         ser.close()
@@ -1283,7 +1390,9 @@ class ShimmerBluetooth:
                 if attempt < retries:
                     time.sleep(retry_delay * (attempt + 1))
 
-        raise ShimmerConnectError(f'Could not connect to {port} after {retries + 1} attempts: {last!r}') from last
+        raise ShimmerConnectError(
+            f"Could not connect to {port} after {retries + 1} attempts: {last!r}"
+        ) from last
 
     # --------------------------------------------------------------------------------------- read loop
     def _run_readloop(self):
@@ -1293,15 +1402,21 @@ class ShimmerBluetooth:
 
         except ReadAbort:
             if self._closing:
-                _log.debug('Read loop exiting after cancel request')
+                _log.debug("Read loop exiting after cancel request")
             else:
-                self._fail(ShimmerLinkError('The serial read returned early without a cancel request'))
+                self._fail(
+                    ShimmerLinkError(
+                        "The serial read returned early without a cancel request"
+                    )
+                )
 
-        except BaseException as e:  # noqa: BLE001 - whatever it is, the link is gone and callers must know
+        except (
+            BaseException
+        ) as e:  # noqa: BLE001 - whatever it is, the link is gone and callers must know
             if self._closing:
-                _log.debug('Read loop ended by the shutdown: %r', e)
+                _log.debug("Read loop ended by the shutdown: %r", e)
                 return
-            err = ShimmerLinkError(f'The read loop crashed: {e!r}')
+            err = ShimmerLinkError(f"The read loop crashed: {e!r}")
             err.__cause__ = e
             self._fail(err)
 
@@ -1314,13 +1429,20 @@ class ShimmerBluetooth:
             now = time.monotonic()
             if self._bluetooth.stats.data_packets == self._packets_at_start:
                 # The device takes ~1.5 s to start sampling after it acknowledged the start command
-                if self._start_timeout and now - self._stream_started > self._start_timeout:
-                    self._stalled(f'No data arrived within {self._start_timeout} s of starting the stream')
+                if (
+                    self._start_timeout
+                    and now - self._stream_started > self._start_timeout
+                ):
+                    self._stalled(
+                        f"No data arrived within {self._start_timeout} s of starting the stream"
+                    )
                 continue
 
             idle = now - self._bluetooth.last_data
             if self._stall_timeout and idle > self._stall_timeout:
-                self._stalled(f'No data from the device for {idle:.1f} s while streaming')
+                self._stalled(
+                    f"No data from the device for {idle:.1f} s while streaming"
+                )
 
     def _stalled(self, why: str) -> None:
         self._fail(ShimmerLinkError(why))
@@ -1342,7 +1464,7 @@ class ShimmerBluetooth:
         try:
             compl_obj, return_obj = self._bluetooth.queue_command(cmd)
         except (SerialException, OSError) as e:
-            err = ShimmerLinkError(f'Writing to the device failed: {e!r}')
+            err = ShimmerLinkError(f"Writing to the device failed: {e!r}")
             err.__cause__ = e
             self._fail(err)
             raise self._error
@@ -1356,7 +1478,9 @@ class ShimmerBluetooth:
         except ShimmerTimeoutError:
             self._bluetooth.cancel(compl_obj)
             self._bluetooth.stats.timeouts += 1
-            raise ShimmerTimeoutError(f'{type(cmd).__name__} was not answered within {timeout} s') from None
+            raise ShimmerTimeoutError(
+                f"{type(cmd).__name__} was not answered within {timeout} s"
+            ) from None
 
     def add_stream_callback(self, cb: Callable[[DataPacket], None]) -> None:
         """Add a stream callback which is called when a new data packet arrives
@@ -1397,7 +1521,9 @@ class ShimmerBluetooth:
         """
         return self._process_and_wait(GetSamplingRateCommand(self._revision))
 
-    def set_sampling_rate(self, sr: float, update_exg_rate: bool = False, exg_chips: Iterable[int] = (0,)) -> None:
+    def set_sampling_rate(
+        self, sr: float, update_exg_rate: bool = False, exg_chips: Iterable[int] = (0,)
+    ) -> None:
         """Set the active sampling rate for the device
 
         The command only sets the rate of the microcontroller. The ExG chips of an EMG/ECG unit keep the data
@@ -1442,7 +1568,9 @@ class ShimmerBluetooth:
             self.set_exg_register(chip, 0, bytes((wanted.binary[0],)))
             back = self.get_exg_register(chip)
             if back.data_rate != rate_sps:
-                raise ShimmerError(f'ExG chip {chip} reports {back.data_rate} SPS after setting {rate_sps} SPS')
+                raise ShimmerError(
+                    f"ExG chip {chip} reports {back.data_rate} SPS after setting {rate_sps} SPS"
+                )
 
     def get_battery_state(self, in_percent: bool) -> float:
         """Retrieve the battery state of the device
@@ -1505,7 +1633,9 @@ class ShimmerBluetooth:
         :return: The firmware type as enum, i.e. SDLog or LogAndStream
             and the numeric firmware version
         """
-        fw_type, major, minor, rel = self._process_and_wait(GetFirmwareVersionCommand(self._revision))
+        fw_type, major, minor, rel = self._process_and_wait(
+            GetFirmwareVersionCommand(self._revision)
+        )
         fw_version = FirmwareVersion(major, minor, rel)
 
         return fw_type, fw_version
@@ -1601,14 +1731,22 @@ class ShimmerBluetooth:
     def _check_exg_configuration(self, sampling_rate: float) -> None:
         reg = self.get_exg_register(0)
         if reg.uses_test_signal:
-            _log.warning('The ExG chip routes its internal test signal to the inputs: the data is not EMG/ECG. '
-                         'Use ExGRegister.emg_preset() with set_exg_register() to switch to the electrodes.')
+            _log.warning(
+                "The ExG chip routes its internal test signal to the inputs: the data is not EMG/ECG. "
+                "Use ExGRegister.emg_preset() with set_exg_register() to switch to the electrodes."
+            )
         if reg.data_rate < sampling_rate:
-            _log.warning('The ExG chip converts %d times per second but the sampling rate is %.0f Hz: about '
-                         '%.0f%% of the samples will be repeats. Use set_sampling_rate(..., update_exg_rate=True).',
-                         reg.data_rate, sampling_rate, 100.0 * (1 - reg.data_rate / sampling_rate))
+            _log.warning(
+                "The ExG chip converts %d times per second but the sampling rate is %.0f Hz: about "
+                "%.0f%% of the samples will be repeats. Use set_sampling_rate(..., update_exg_rate=True).",
+                reg.data_rate,
+                sampling_rate,
+                100.0 * (1 - reg.data_rate / sampling_rate),
+            )
 
-    def start_streaming(self, wait_for_data: float | None = None, check_exg: bool = True) -> None:
+    def start_streaming(
+        self, wait_for_data: float | None = None, check_exg: bool = True
+    ) -> None:
         """Start streaming data
 
         :param wait_for_data: If given, do not return before the first data packet has arrived, and fail with
@@ -1624,24 +1762,35 @@ class ShimmerBluetooth:
         ctypes = [EChannelType.TIMESTAMP] + ctypes
 
         stream_types = [(t, self._revision.get_channel_dtype(t)) for t in ctypes]
-        clock_rate = 1.0 / self._revision.ticks2sec(1)  # ticks of the device clock per second
-        self._bluetooth.set_stream_types(stream_types, period_ticks=clock_rate / sr if sr else None)
+        clock_rate = 1.0 / self._revision.ticks2sec(
+            1
+        )  # ticks of the device clock per second
+        self._bluetooth.set_stream_types(
+            stream_types, period_ticks=clock_rate / sr if sr else None
+        )
 
         # Measured on LogAndStream 0.15.4 (RN42 module): 22 kB/s streams without losses, 26 kB/s loses a few
         # samples per minute. The CRC adds bytes to every packet, so it is the first thing to give up at the top.
-        wire_rate = sr * (1 + self._bluetooth._payload_len + self._bluetooth.crc_len) if sr else 0
+        wire_rate = (
+            sr * (1 + self._bluetooth._payload_len + self._bluetooth.crc_len)
+            if sr
+            else 0
+        )
         if self._bluetooth.crc_len and wire_rate > self._CRC_THROUGHPUT_WARNING:
-            _log.warning('The stream needs %.0f kB/s with the %d-byte CRC (%.0f kB/s without): close to what the '
-                         'Bluetooth module sustains, and packets are lost occasionally. Consider crc="off" '
-                         '(frames are then validated by the continuity of the timestamps) or crc=1.',
-                         wire_rate / 1000, self._bluetooth.crc_len,
-                         sr * (1 + self._bluetooth._payload_len) / 1000)
+            _log.warning(
+                "The stream needs %.0f kB/s with the %d-byte CRC (%.0f kB/s without): close to what the "
+                'Bluetooth module sustains, and packets are lost occasionally. Consider crc="off" '
+                "(frames are then validated by the continuity of the timestamps) or crc=1.",
+                wire_rate / 1000,
+                self._bluetooth.crc_len,
+                sr * (1 + self._bluetooth._payload_len) / 1000,
+            )
 
         if check_exg and sr and any(is_exg_ch(t) for t in ctypes):
             try:
                 self._check_exg_configuration(sr)
             except ShimmerError as e:  # purely informative
-                _log.debug('Could not check the ExG configuration: %r', e)
+                _log.debug("Could not check the ExG configuration: %r", e)
 
         self._process_and_wait(StartStreamingCommand(self._revision))
         self._packets_at_start = self._bluetooth.stats.data_packets
@@ -1654,7 +1803,9 @@ class ShimmerBluetooth:
                 if self._error is not None:
                     raise self._error
                 if time.monotonic() > deadline:
-                    raise ShimmerTimeoutError(f'No data arrived within {wait_for_data} s of starting the stream')
+                    raise ShimmerTimeoutError(
+                        f"No data arrived within {wait_for_data} s of starting the stream"
+                    )
                 time.sleep(0.01)
 
     def stop_streaming(self) -> None:
@@ -1668,15 +1819,11 @@ class ShimmerBluetooth:
         self._process_and_wait(StopStreamingCommand(self._revision))
 
     def start_logging(self) -> None:
-        """Start logging data to the SD card of the device
-
-        """
+        """Start logging data to the SD card of the device"""
         self._process_and_wait(StartLoggingCommand(self._revision))
 
     def stop_logging(self) -> None:
-        """Stop logging data to the SD card of the device
-
-        """
+        """Stop logging data to the SD card of the device"""
         self._process_and_wait(StopLoggingCommand(self._revision))
 
     def send_ping(self) -> None:

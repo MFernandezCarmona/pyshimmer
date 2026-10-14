@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Tests of how the Bluetooth API behaves when the link misbehaves."""
+
 import os
 import pty
 import threading
@@ -24,11 +25,20 @@ from unittest import TestCase
 from serial import Serial
 
 from pyshimmer.bluetooth.bt_api import BluetoothRequestHandler, ShimmerBluetooth
-from pyshimmer.bluetooth.bt_commands import GetDeviceNameCommand, GetSamplingRateCommand, SetSamplingRateCommand, \
-    DataPacket
+from pyshimmer.bluetooth.bt_commands import (
+    GetDeviceNameCommand,
+    GetSamplingRateCommand,
+    SetSamplingRateCommand,
+    DataPacket,
+)
 from pyshimmer.bluetooth.bt_crc import crc16, crc_matches
-from pyshimmer.bluetooth.bt_errors import CommandRefused, ShimmerConnectError, ShimmerError, ShimmerLinkError, \
-    ShimmerTimeoutError
+from pyshimmer.bluetooth.bt_errors import (
+    CommandRefused,
+    ShimmerConnectError,
+    ShimmerError,
+    ShimmerLinkError,
+    ShimmerTimeoutError,
+)
 from pyshimmer.bluetooth.bt_lock import ConnectLock
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial
 from pyshimmer.dev.channels import EChannelType
@@ -72,17 +82,25 @@ class CrcTest(TestCase):
     """Vectors captured from a Shimmer3 running LogAndStream 0.15.4 with the CRC mode on"""
 
     def test_lone_ack(self):
-        self.assertEqual(crc16(b'\xff'), bytes.fromhex('f465'))
+        self.assertEqual(crc16(b"\xff"), bytes.fromhex("f465"))
 
     def test_replies_cover_the_acknowledgment(self):
-        self.assertEqual(crc16(bytes.fromhex('ff2f030000000f04')), bytes.fromhex('0cd0'))
-        self.assertEqual(crc16(bytes.fromhex('ff041000')), bytes.fromhex('f784'))
-        self.assertEqual(crc16(bytes.fromhex('ff8a7124')), bytes.fromhex('51f8'))
-        self.assertEqual(crc16(bytes.fromhex('ff02200001ff0109030' '11d1e1f')), bytes.fromhex('80b8'))
+        self.assertEqual(
+            crc16(bytes.fromhex("ff2f030000000f04")), bytes.fromhex("0cd0")
+        )
+        self.assertEqual(crc16(bytes.fromhex("ff041000")), bytes.fromhex("f784"))
+        self.assertEqual(crc16(bytes.fromhex("ff8a7124")), bytes.fromhex("51f8"))
+        self.assertEqual(
+            crc16(bytes.fromhex("ff02200001ff0109030" "11d1e1f")), bytes.fromhex("80b8")
+        )
 
     def test_data_packets(self):
-        self.assertEqual(crc16(bytes.fromhex('00c1ea84' '80009de500a0f7')), bytes.fromhex('6d63'))
-        self.assertEqual(crc16(bytes.fromhex('00e1ea84' '80009ddd00a103')), bytes.fromhex('e12f'))
+        self.assertEqual(
+            crc16(bytes.fromhex("00c1ea84" "80009de500a0f7")), bytes.fromhex("6d63")
+        )
+        self.assertEqual(
+            crc16(bytes.fromhex("00e1ea84" "80009ddd00a103")), bytes.fromhex("e12f")
+        )
 
     def test_table_driven_implementation_equals_the_reference(self):
         import random
@@ -99,12 +117,12 @@ class CrcTest(TestCase):
             self.assertEqual(crc16(data), bytes((ref & 0xFF, (ref >> 8) & 0xFF)))
 
     def test_crc_matches(self):
-        frame = bytes.fromhex('00c1ea84' '80009de500a0f7')
-        self.assertTrue(crc_matches(frame, bytes.fromhex('6d63'), 2))
-        self.assertTrue(crc_matches(frame, bytes.fromhex('6d'), 1))
-        self.assertFalse(crc_matches(frame, bytes.fromhex('6d64'), 2))
-        self.assertFalse(crc_matches(frame, bytes.fromhex('6d63'), 1))
-        self.assertFalse(crc_matches(frame, b'', 0))
+        frame = bytes.fromhex("00c1ea84" "80009de500a0f7")
+        self.assertTrue(crc_matches(frame, bytes.fromhex("6d63"), 2))
+        self.assertTrue(crc_matches(frame, bytes.fromhex("6d"), 1))
+        self.assertFalse(crc_matches(frame, bytes.fromhex("6d64"), 2))
+        self.assertFalse(crc_matches(frame, bytes.fromhex("6d63"), 1))
+        self.assertFalse(crc_matches(frame, b"", 0))
 
 
 class TolerantHandlerTest(TestCase):
@@ -113,7 +131,7 @@ class TolerantHandlerTest(TestCase):
     def setUp(self) -> None:
         self.master, self.slave = pty.openpty()
         self.serial = Serial(os.ttyname(self.slave), 115200)
-        self.master_f = os.fdopen(self.master, 'r+b', 0)
+        self.master_f = os.fdopen(self.master, "r+b", 0)
         self.bt = BluetoothSerial(self.serial)
 
     def tearDown(self) -> None:
@@ -122,7 +140,7 @@ class TolerantHandlerTest(TestCase):
         os.close(self.slave)
 
     def handler(self, **kw) -> BluetoothRequestHandler:
-        kw.setdefault('lookahead_timeout', 0.02)
+        kw.setdefault("lookahead_timeout", 0.02)
         h = BluetoothRequestHandler(self.bt, REVISION, tolerant=True, **kw)
         h.set_stream_types([(t, REVISION.get_channel_dtype(t)) for t in self.TYPES])
         return h
@@ -132,7 +150,7 @@ class TolerantHandlerTest(TestCase):
 
     @staticmethod
     def pkt(ts: int, adc: int, crc_len: int = 0) -> bytes:
-        body = b'\x00' + ts.to_bytes(3, 'little') + adc.to_bytes(2, 'little')
+        body = b"\x00" + ts.to_bytes(3, "little") + adc.to_bytes(2, "little")
         return body + crc16(body)[:crc_len]
 
     def test_waiting_for_the_rest_of_a_frame_does_not_spin(self):
@@ -153,27 +171,29 @@ class TolerantHandlerTest(TestCase):
         spent = time.process_time() - cpu0
 
         self.assertEqual(len(got), 1)
-        self.assertLess(spent, 0.1, f'{spent:.3f} s of CPU while waiting 0.4 s: busy waiting')
+        self.assertLess(
+            spent, 0.1, f"{spent:.3f} s of CPU while waiting 0.4 s: busy waiting"
+        )
 
     def test_unexpected_ack_is_ignored(self):
         h = self.handler()
-        self.feed(b'\xff')
+        self.feed(b"\xff")
         h.process_single_input_event()
         self.assertEqual(h.stats.unexpected_acks, 1)
 
     def test_stray_bytes_are_skipped_and_the_next_command_works(self):
         h = self.handler()
-        self.feed(b'\x37\x38')
+        self.feed(b"\x37\x38")
         h.process_single_input_event()
         h.process_single_input_event()
         self.assertEqual(h.stats.skipped_bytes, 2)
 
         compl, resp = h.queue_command(GetDeviceNameCommand(REVISION))
-        self.feed(b'\xff\x7a\x05S_PPG')
+        self.feed(b"\xff\x7a\x05S_PPG")
         h.process_single_input_event()
         h.process_single_input_event()
         self.assertTrue(compl.has_completed())
-        self.assertEqual(resp.get_result(), 'S_PPG')
+        self.assertEqual(resp.get_result(), "S_PPG")
 
     def test_late_response_does_not_confuse_the_next_command(self):
         h = self.handler()
@@ -182,7 +202,7 @@ class TolerantHandlerTest(TestCase):
 
         # Without a CRC a response nobody awaits cannot be told from garbage that starts with a response code:
         # it is skipped a byte at a time (decoding it could swallow the packets that follow)
-        self.feed(b'\xff\x7a\x03ABC')
+        self.feed(b"\xff\x7a\x03ABC")
         for _ in range(6):
             h.process_single_input_event()  # the acknowledgment nobody expects, then the five bytes of the reply
         self.assertEqual(h.stats.unexpected_acks, 1)
@@ -190,27 +210,27 @@ class TolerantHandlerTest(TestCase):
         self.assertEqual(h.stats.late_responses, 0)
 
         compl, resp = h.queue_command(GetDeviceNameCommand(REVISION))
-        self.feed(b'\xff\x7a\x02ok')
+        self.feed(b"\xff\x7a\x02ok")
         h.process_single_input_event()
         h.process_single_input_event()
-        self.assertEqual(resp.get_result(), 'ok')
+        self.assertEqual(resp.get_result(), "ok")
 
     def test_late_response_is_consumed_when_the_crc_vouches_for_it(self):
         h = self.handler(crc_len=2)
         compl, _ = h.queue_command(GetDeviceNameCommand(REVISION))
         h.cancel(compl)  # the caller gave up
 
-        frame = b'\xff\x7a\x03ABC'
+        frame = b"\xff\x7a\x03ABC"
         self.feed(frame + crc16(frame))
         h.process_single_input_event()  # one frame: acknowledgment and response
         self.assertEqual(h.stats.late_responses, 1)
         self.assertEqual(h.stats.skipped_bytes, 0)
 
         compl, resp = h.queue_command(GetDeviceNameCommand(REVISION))
-        frame = b'\xff\x7a\x02ok'
+        frame = b"\xff\x7a\x02ok"
         self.feed(frame + crc16(frame))
         h.process_single_input_event()
-        self.assertEqual(resp.get_result(), 'ok')
+        self.assertEqual(resp.get_result(), "ok")
 
     def test_response_is_matched_by_code_when_an_acknowledgment_went_missing(self):
         h = self.handler()
@@ -218,7 +238,7 @@ class TolerantHandlerTest(TestCase):
         set_compl, _ = h.queue_command(SetSamplingRateCommand(REVISION, 100.0))
         get_compl, get_resp = h.queue_command(GetSamplingRateCommand(REVISION))
 
-        self.feed(b'\xff\x04\x40\x00')
+        self.feed(b"\xff\x04\x40\x00")
         h.process_single_input_event()
         h.process_single_input_event()
 
@@ -231,11 +251,18 @@ class TolerantHandlerTest(TestCase):
         got: List[DataPacket] = []
         h.add_stream_callback(got.append)
 
-        self.feed(self.pkt(ts_of(0), adc_of(0)) + self.pkt(ts_of(1), adc_of(1)) + self.pkt(ts_of(2), adc_of(2)))
+        self.feed(
+            self.pkt(ts_of(0), adc_of(0))
+            + self.pkt(ts_of(1), adc_of(1))
+            + self.pkt(ts_of(2), adc_of(2))
+        )
         for _ in range(3):
             h.process_single_input_event()
 
-        self.assertEqual([p[EChannelType.INTERNAL_ADC_A3] for p in got], [adc_of(0), adc_of(1), adc_of(2)])
+        self.assertEqual(
+            [p[EChannelType.INTERNAL_ADC_A3] for p in got],
+            [adc_of(0), adc_of(1), adc_of(2)],
+        )
         self.assertEqual(h.stats.framing_errors, 0)
 
     def test_a_packet_that_lost_a_byte_is_never_delivered(self):
@@ -245,14 +272,21 @@ class TolerantHandlerTest(TestCase):
 
         broken = self.pkt(ts_of(1), adc_of(1))
         broken = broken[:4] + broken[5:]  # one payload byte lost
-        self.feed(self.pkt(ts_of(0), adc_of(0)) + broken + self.pkt(ts_of(2), adc_of(2)) +
-                  self.pkt(ts_of(3), adc_of(3)))
+        self.feed(
+            self.pkt(ts_of(0), adc_of(0))
+            + broken
+            + self.pkt(ts_of(2), adc_of(2))
+            + self.pkt(ts_of(3), adc_of(3))
+        )
         for _ in range(20):
             h.process_single_input_event()
             if len(got) == 3:
                 break
 
-        self.assertEqual([p[EChannelType.INTERNAL_ADC_A3] for p in got], [adc_of(0), adc_of(2), adc_of(3)])
+        self.assertEqual(
+            [p[EChannelType.INTERNAL_ADC_A3] for p in got],
+            [adc_of(0), adc_of(2), adc_of(3)],
+        )
         self.assertGreaterEqual(h.stats.framing_errors, 1)
 
     def test_callback_exception_does_not_stop_the_stream(self):
@@ -260,7 +294,7 @@ class TolerantHandlerTest(TestCase):
         got: List[int] = []
 
         def bad(_):
-            raise RuntimeError('bug in user code')
+            raise RuntimeError("bug in user code")
 
         h.add_stream_callback(bad)
         h.add_stream_callback(lambda p: got.append(p[EChannelType.INTERNAL_ADC_A3]))
@@ -275,7 +309,7 @@ class TolerantHandlerTest(TestCase):
     def test_crc_mode_ack_and_response_form_one_frame(self):
         h = self.handler(crc_len=2)
         compl, resp = h.queue_command(GetSamplingRateCommand(REVISION))
-        reply = b'\xff\x04\x40\x00'
+        reply = b"\xff\x04\x40\x00"
         self.feed(reply + crc16(reply))
         h.process_single_input_event()
 
@@ -285,7 +319,7 @@ class TolerantHandlerTest(TestCase):
     def test_crc_mode_lone_acknowledgment(self):
         h = self.handler(crc_len=2)
         compl, _ = h.queue_command(SetSamplingRateCommand(REVISION, 100.0))
-        self.feed(b'\xff' + crc16(b'\xff'))
+        self.feed(b"\xff" + crc16(b"\xff"))
         h.process_single_input_event()
         self.assertTrue(compl.has_completed())
 
@@ -296,14 +330,21 @@ class TolerantHandlerTest(TestCase):
 
         bad = bytearray(self.pkt(ts_of(1), adc_of(1), 2))
         bad[4] ^= 0x55  # corrupted payload byte, the CRC no longer matches
-        self.feed(self.pkt(ts_of(0), adc_of(0), 2) + bytes(bad) + self.pkt(ts_of(2), adc_of(2), 2) +
-                  self.pkt(ts_of(3), adc_of(3), 2))
+        self.feed(
+            self.pkt(ts_of(0), adc_of(0), 2)
+            + bytes(bad)
+            + self.pkt(ts_of(2), adc_of(2), 2)
+            + self.pkt(ts_of(3), adc_of(3), 2)
+        )
         for _ in range(20):
             h.process_single_input_event()
             if len(got) == 3:
                 break
 
-        self.assertEqual([p[EChannelType.INTERNAL_ADC_A3] for p in got], [adc_of(0), adc_of(2), adc_of(3)])
+        self.assertEqual(
+            [p[EChannelType.INTERNAL_ADC_A3] for p in got],
+            [adc_of(0), adc_of(2), adc_of(3)],
+        )
         self.assertGreaterEqual(h.stats.crc_errors, 1)
 
     def test_crc_mode_lost_byte_does_not_cost_the_next_valid_packet(self):
@@ -313,23 +354,29 @@ class TolerantHandlerTest(TestCase):
 
         broken = self.pkt(ts_of(1), adc_of(1), 2)
         broken = broken[:2] + broken[3:]
-        self.feed(self.pkt(ts_of(0), adc_of(0), 2) + broken + self.pkt(ts_of(2), adc_of(2), 2))
+        self.feed(
+            self.pkt(ts_of(0), adc_of(0), 2) + broken + self.pkt(ts_of(2), adc_of(2), 2)
+        )
         for _ in range(20):
             h.process_single_input_event()
             if len(got) == 2:
                 break
 
-        self.assertEqual([p[EChannelType.INTERNAL_ADC_A3] for p in got], [adc_of(0), adc_of(2)])
+        self.assertEqual(
+            [p[EChannelType.INTERNAL_ADC_A3] for p in got], [adc_of(0), adc_of(2)]
+        )
 
     def test_crc_mode_status_update(self):
         h = self.handler(crc_len=2)
         status: List[List[bool]] = []
         h.add_status_callback(status.append)
 
-        frame = b'\x8a\x71\x21'
+        frame = b"\x8a\x71\x21"
         self.feed(frame + crc16(frame))
         h.process_single_input_event()
-        self.assertEqual(status, [[True, False, False, False, False, True, False, False]])
+        self.assertEqual(
+            status, [[True, False, False, False, False, True, False, False]]
+        )
 
 
 class _ApiTestCase(TestCase):
@@ -345,11 +392,16 @@ class _ApiTestCase(TestCase):
         for p in self._open:
             p.close()
 
-    def make(self, device_kwargs: Optional[dict] = None, initialize: bool = True, **api_kwargs):
+    def make(
+        self,
+        device_kwargs: Optional[dict] = None,
+        initialize: bool = True,
+        **api_kwargs,
+    ):
         pd = _PtyDevice(**(device_kwargs or {}))
         self._open.append(pd)
-        api_kwargs.setdefault('presync', False)
-        api_kwargs.setdefault('crc', 'off')
+        api_kwargs.setdefault("presync", False)
+        api_kwargs.setdefault("crc", "off")
         dev = ShimmerBluetooth(pd.serial, **api_kwargs)
         self._devs.append(dev)
         if initialize:
@@ -387,7 +439,7 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
             try:
                 dev.get_sampling_rate()
             except BaseException as e:  # noqa: BLE001
-                result['exc'] = e
+                result["exc"] = e
 
         t = threading.Thread(target=ask, daemon=True)
         t.start()
@@ -396,9 +448,9 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         pd.device.hang_up()
         t.join(3.0)
 
-        self.assertFalse(t.is_alive(), 'a request stayed blocked after the link died')
+        self.assertFalse(t.is_alive(), "a request stayed blocked after the link died")
         self.assertLess(time.monotonic() - t0, 3.0)
-        self.assertIsInstance(result.get('exc'), ShimmerLinkError)
+        self.assertIsInstance(result.get("exc"), ShimmerLinkError)
         self.assertEqual(len(errors), 1)
         self.assertFalse(dev.connected)
         self.assertIsInstance(dev.last_error, ShimmerLinkError)
@@ -414,11 +466,11 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         dev.add_error_callback(errors.append)
 
         def boom():
-            raise MemoryError('simulated crash inside the receiver')
+            raise MemoryError("simulated crash inside the receiver")
 
         dev._bluetooth.process_single_input_event = boom
-        pd.device.inject_now(b'\x00')  # wake the read loop up
-        self.assertTrue(self.wait_for(lambda: errors), 'the crash was not reported')
+        pd.device.inject_now(b"\x00")  # wake the read loop up
+        self.assertTrue(self.wait_for(lambda: errors), "the crash was not reported")
         self.assertIsInstance(errors[0], ShimmerLinkError)
         self.assertIsInstance(errors[0].__cause__, MemoryError)
 
@@ -431,7 +483,7 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         with self.assertRaises(ShimmerTimeoutError):
             dev.get_sampling_rate()
         self.assertLess(time.monotonic() - t0, 1.5)
-        self.assertEqual(dev.link_stats['timeouts'], 1)
+        self.assertEqual(dev.link_stats["timeouts"], 1)
 
         pd.device.ignore.discard(0x03)
         self.assertEqual(dev.get_sampling_rate(), 512.0)
@@ -445,12 +497,16 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
 
         pd.device.reply_delay = 0.0
         time.sleep(0.8)  # the late acknowledgment and response arrive now
-        pd.device.dr = 32  # so that a mix-up would be visible: the next answer must be 1024 Hz
+        pd.device.dr = (
+            32  # so that a mix-up would be visible: the next answer must be 1024 Hz
+        )
         self.assertEqual(dev.get_sampling_rate(), 1024.0)
-        self.assertGreaterEqual(dev.link_stats['skipped_bytes'], 3)  # the late response, as noise (no CRC)
+        self.assertGreaterEqual(
+            dev.link_stats["skipped_bytes"], 3
+        )  # the late response, as noise (no CRC)
 
     def test_a_late_reply_is_consumed_when_the_crc_vouches_for_it(self):
-        pd, dev = self.make(command_timeout=0.15, crc='auto')
+        pd, dev = self.make(command_timeout=0.15, crc="auto")
         pd.device.reply_delay = 0.5
         with self.assertRaises(ShimmerTimeoutError):
             dev.get_sampling_rate()
@@ -459,8 +515,8 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         time.sleep(0.8)  # the late acknowledgment and response arrive now
         pd.device.dr = 32
         self.assertEqual(dev.get_sampling_rate(), 1024.0)
-        self.assertEqual(dev.link_stats['late_responses'], 1)
-        self.assertEqual(dev.link_stats['skipped_bytes'], 0)
+        self.assertEqual(dev.link_stats["late_responses"], 1)
+        self.assertEqual(dev.link_stats["skipped_bytes"], 0)
 
     def test_requests_from_several_threads_are_not_mixed_up(self):
         pd, dev = self.make()
@@ -470,7 +526,7 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
             for _ in range(60):
                 try:
                     if dev.get_sampling_rate() != 512.0:
-                        errors.append('wrong value')
+                        errors.append("wrong value")
                 except BaseException as e:  # noqa: BLE001
                     errors.append(e)
 
@@ -488,21 +544,25 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         got = self.start_stream(dev)
         self.assertTrue(self.wait_for(lambda: len(got) > 20))
 
-        pd.device.inject(b'\x37')
+        pd.device.inject(b"\x37")
         n = len(got)
-        self.assertTrue(self.wait_for(lambda: len(got) > n + 50), 'the stream did not continue')
+        self.assertTrue(
+            self.wait_for(lambda: len(got) > n + 50), "the stream did not continue"
+        )
         self.assertTrue(dev.connected)
-        self.assertGreaterEqual(dev.link_stats['skipped_bytes'], 1)
+        self.assertGreaterEqual(dev.link_stats["skipped_bytes"], 1)
 
         inv = {FakeDevice.value(k, 0): k for k in range(20000)}
         seqs = [inv.get(p[EChannelType.EXG1_CH1_24BIT], -1) for p in got]
-        self.assertNotIn(-1, seqs, 'a corrupted packet was delivered as valid')
-        self.assertLessEqual(max(b - a for a, b in zip(seqs, seqs[1:])), 3)  # a handful of packets at most
+        self.assertNotIn(-1, seqs, "a corrupted packet was delivered as valid")
+        self.assertLessEqual(
+            max(b - a for a, b in zip(seqs, seqs[1:])), 3
+        )  # a handful of packets at most
 
     def test_shutdown_while_the_stream_is_running_is_prompt(self):
         # The read loop must notice the cancellation even though data keeps arriving all the time
         for _ in range(5):
-            pd, dev = self.make(device_kwargs={'sampling_dr': 16})  # 2048 Hz
+            pd, dev = self.make(device_kwargs={"sampling_dr": 16})  # 2048 Hz
             got = self.start_stream(dev)
             self.assertTrue(self.wait_for(lambda: len(got) > 50))
 
@@ -516,7 +576,7 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         good: List[DataPacket] = []
 
         def bad(_):
-            raise RuntimeError('bug in the application callback')
+            raise RuntimeError("bug in the application callback")
 
         dev.add_stream_callback(bad)
         dev.add_stream_callback(good.append)
@@ -524,7 +584,7 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
 
         self.assertTrue(self.wait_for(lambda: len(good) > 30))
         self.assertTrue(dev.connected)
-        self.assertGreater(dev.link_stats['callback_errors'], 0)
+        self.assertGreater(dev.link_stats["callback_errors"], 0)
 
     def test_a_stalled_stream_is_detected_by_the_watchdog(self):
         pd, dev = self.make(stall_timeout=0.5)
@@ -534,7 +594,9 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         self.assertTrue(self.wait_for(lambda: len(got) > 10))
 
         pd.device.mute()
-        self.assertTrue(self.wait_for(lambda: errors, timeout=3.0), 'the stall was not detected')
+        self.assertTrue(
+            self.wait_for(lambda: errors, timeout=3.0), "the stall was not detected"
+        )
         self.assertIsInstance(errors[0], ShimmerLinkError)
         self.assertFalse(dev.connected)
 
@@ -557,34 +619,36 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         pd.device.streaming = True  # the previous session crashed without stopping it
         time.sleep(0.2)  # let data pile up in the buffer
 
-        dev = ShimmerBluetooth(pd.serial, presync=True, crc='off')
+        dev = ShimmerBluetooth(pd.serial, presync=True, crc="off")
         self._devs.append(dev)
         dev.initialize()
 
         self.assertFalse(pd.device.streaming)
         self.assertEqual(dev.get_sampling_rate(), 512.0)
         self.assertTrue(dev.connected)
-        self.assertEqual(pd.device.commands[0][0], 0x20)  # the first thing sent was STOP_STREAMING
+        self.assertEqual(
+            pd.device.commands[0][0], 0x20
+        )  # the first thing sent was STOP_STREAMING
 
     # ------------------------------------------------------------------------------------------------ CRC
     def test_crc_is_enabled_on_capable_firmware_and_frames_are_verified(self):
-        pd, dev = self.make(crc='auto')
+        pd, dev = self.make(crc="auto")
         self.assertEqual(dev.crc_len, 2)
         self.assertEqual(pd.device.crc_len, 2)
 
         self.assertEqual(dev.get_sampling_rate(), 512.0)
         got = self.start_stream(dev)
         self.assertTrue(self.wait_for(lambda: len(got) > 30))
-        self.assertEqual(dev.link_stats['crc_errors'], 0)
-        self.assertEqual(dev.link_stats['framing_errors'], 0)
+        self.assertEqual(dev.link_stats["crc_errors"], 0)
+        self.assertEqual(dev.link_stats["framing_errors"], 0)
 
     def test_crc_is_not_enabled_on_old_firmware(self):
-        pd, dev = self.make(device_kwargs={'fw': (3, 0, 11, 0)}, crc='auto')
+        pd, dev = self.make(device_kwargs={"fw": (3, 0, 11, 0)}, crc="auto")
         self.assertEqual(dev.crc_len, 0)
         self.assertNotIn(0x8B, [c for c, _ in pd.device.commands])
 
     def test_corrupt_frame_is_dropped_with_crc(self):
-        pd, dev = self.make(crc='auto')
+        pd, dev = self.make(crc="auto")
         got = self.start_stream(dev)
         self.assertTrue(self.wait_for(lambda: len(got) > 20))
 
@@ -593,8 +657,10 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
         pd.device.inject(bytes(bad))
         n = len(got)
         self.assertTrue(self.wait_for(lambda: len(got) > n + 40))
-        self.assertGreaterEqual(dev.link_stats['crc_errors'], 1)
-        self.assertNotIn(FakeDevice.value(900000, 0), [p[EChannelType.EXG1_CH1_24BIT] for p in got])
+        self.assertGreaterEqual(dev.link_stats["crc_errors"], 1)
+        self.assertNotIn(
+            FakeDevice.value(900000, 0), [p[EChannelType.EXG1_CH1_24BIT] for p in got]
+        )
 
     # ----------------------------------------------------------------------------------------- connect()
     def test_connect_retries_after_a_failed_attempt(self):
@@ -608,8 +674,14 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
                 pd.device.hang_up()  # the first attempt is refused: the device hangs up at once
             return pd.serial
 
-        dev = ShimmerBluetooth.connect('fake', serial_factory=factory, retries=2, retry_delay=0.05,
-                                       presync=False, crc='off')
+        dev = ShimmerBluetooth.connect(
+            "fake",
+            serial_factory=factory,
+            retries=2,
+            retry_delay=0.05,
+            presync=False,
+            crc="off",
+        )
         self._devs.append(dev)
         self.assertEqual(len(attempts), 2)
         self.assertTrue(dev.connected)
@@ -626,8 +698,14 @@ class ShimmerBluetoothReliabilityTest(_ApiTestCase):
             return pd.serial
 
         with self.assertRaises(ShimmerConnectError):
-            ShimmerBluetooth.connect('fake', serial_factory=factory, retries=1, retry_delay=0.01,
-                                     presync=False, crc='off')
+            ShimmerBluetooth.connect(
+                "fake",
+                serial_factory=factory,
+                retries=1,
+                retry_delay=0.01,
+                presync=False,
+                crc="off",
+            )
         self.assertEqual(len(attempts), 2)
 
 
@@ -635,25 +713,27 @@ class ConnectLockTest(TestCase):
 
     def test_second_holder_waits_for_the_first(self):
         import tempfile
-        path = os.path.join(tempfile.mkdtemp(), 'bt.lock')
+
+        path = os.path.join(tempfile.mkdtemp(), "bt.lock")
         order = []
 
         def second():
             with ConnectLock(path, timeout=5.0):
-                order.append('second')
+                order.append("second")
 
         with ConnectLock(path, timeout=5.0):
             t = threading.Thread(target=second)
             t.start()
             time.sleep(0.3)
-            order.append('first')
+            order.append("first")
         t.join(5.0)
 
-        self.assertEqual(order, ['first', 'second'])
+        self.assertEqual(order, ["first", "second"])
 
     def test_lock_times_out(self):
         import tempfile
-        path = os.path.join(tempfile.mkdtemp(), 'bt.lock')
+
+        path = os.path.join(tempfile.mkdtemp(), "bt.lock")
         with ConnectLock(path, timeout=5.0):
             with self.assertRaises(ShimmerConnectError):
                 with ConnectLock(path, timeout=0.3):
@@ -700,20 +780,22 @@ class ExGConfigurationTest(_ApiTestCase):
             dev.set_exg_data_rate(125)
 
     def test_start_streaming_warns_about_a_chip_slower_than_the_sampling_rate(self):
-        pd, dev = self.make(device_kwargs={'sampling_dr': 16})  # 2048 Hz, the simulated chip does 2000 SPS
-        with self.assertLogs('pyshimmer.bluetooth.bt_api', level='WARNING') as logs:
+        pd, dev = self.make(
+            device_kwargs={"sampling_dr": 16}
+        )  # 2048 Hz, the simulated chip does 2000 SPS
+        with self.assertLogs("pyshimmer.bluetooth.bt_api", level="WARNING") as logs:
             dev.start_streaming()
-        self.assertTrue(any('repeats' in m for m in logs.output), logs.output)
+        self.assertTrue(any("repeats" in m for m in logs.output), logs.output)
 
     def test_start_streaming_warns_about_the_test_signal(self):
         pd, dev = self.make()
-        pd.device.exg_regs[:] = bytes.fromhex('03ab1065652000000203')
-        with self.assertLogs('pyshimmer.bluetooth.bt_api', level='WARNING') as logs:
+        pd.device.exg_regs[:] = bytes.fromhex("03ab1065652000000203")
+        with self.assertLogs("pyshimmer.bluetooth.bt_api", level="WARNING") as logs:
             dev.start_streaming()
-        self.assertTrue(any('test signal' in m for m in logs.output), logs.output)
+        self.assertTrue(any("test signal" in m for m in logs.output), logs.output)
 
     def test_start_streaming_check_can_be_skipped(self):
-        pd, dev = self.make(device_kwargs={'sampling_dr': 16})
+        pd, dev = self.make(device_kwargs={"sampling_dr": 16})
         dev.start_streaming(check_exg=False)
         self.assertNotIn(0x63, [c for c, _ in pd.device.commands])
 
@@ -721,14 +803,18 @@ class ExGConfigurationTest(_ApiTestCase):
 class ThroughputWarningTest(_ApiTestCase):
 
     def test_warns_when_the_crc_pushes_the_stream_to_the_limit(self):
-        pd, dev = self.make(device_kwargs={'sampling_dr': 16}, crc='auto')  # 2048 Hz, 13 bytes per packet
-        with self.assertLogs('pyshimmer.bluetooth.bt_api', level='WARNING') as logs:
+        pd, dev = self.make(
+            device_kwargs={"sampling_dr": 16}, crc="auto"
+        )  # 2048 Hz, 13 bytes per packet
+        with self.assertLogs("pyshimmer.bluetooth.bt_api", level="WARNING") as logs:
             dev.start_streaming(check_exg=False)
-        self.assertTrue(any('CRC' in m and 'kB/s' in m for m in logs.output), logs.output)
+        self.assertTrue(
+            any("CRC" in m and "kB/s" in m for m in logs.output), logs.output
+        )
 
     def test_no_warning_at_a_comfortable_rate(self):
-        pd, dev = self.make(device_kwargs={'sampling_dr': 32}, crc='auto')  # 1024 Hz
-        with self.assertNoLogs('pyshimmer.bluetooth.bt_api', level='WARNING'):
+        pd, dev = self.make(device_kwargs={"sampling_dr": 32}, crc="auto")  # 1024 Hz
+        with self.assertNoLogs("pyshimmer.bluetooth.bt_api", level="WARNING"):
             dev.start_streaming(check_exg=False)
 
 
@@ -744,7 +830,7 @@ class RefusalTest(_ApiTestCase):
 
         self.assertEqual(dev.get_sampling_rate(), 32768 / 64)
         self.assertTrue(dev.connected)
-        self.assertEqual(dev.link_stats['nacks'], 1)
+        self.assertEqual(dev.link_stats["nacks"], 1)
 
     def test_a_refused_request_with_a_response_does_not_wait_for_the_response(self):
         pd, dev = self.make(command_timeout=2.0)
@@ -759,7 +845,7 @@ class RefusalTest(_ApiTestCase):
         self.assertEqual(dev.get_sampling_rate(), 32768 / 64)
 
     def test_a_refusal_is_also_understood_with_the_crc_mode(self):
-        pd, dev = self.make(crc='auto')
+        pd, dev = self.make(crc="auto")
         self.assertEqual(dev.crc_len, 2)
         pd.device.refuse.add(0x92)
 
@@ -767,13 +853,13 @@ class RefusalTest(_ApiTestCase):
             dev.start_logging()
 
         self.assertEqual(dev.get_sampling_rate(), 32768 / 64)
-        self.assertEqual(dev.link_stats['crc_errors'], 0)
+        self.assertEqual(dev.link_stats["crc_errors"], 0)
 
     def test_a_refusal_nobody_asked_for_is_counted_and_ignored(self):
         pd, dev = self.make()
-        pd.device.inject_now(b'\xfe')
+        pd.device.inject_now(b"\xfe")
 
-        self.assertTrue(self.wait_for(lambda: dev.link_stats['unexpected_nacks'] == 1))
+        self.assertTrue(self.wait_for(lambda: dev.link_stats["unexpected_nacks"] == 1))
         self.assertEqual(dev.get_sampling_rate(), 32768 / 64)
 
     def test_the_refusal_is_a_shimmer_error_that_is_not_a_link_failure(self):
@@ -799,19 +885,33 @@ class HardwareRevisionTest(_ApiTestCase):
     def test_the_revision_is_the_one_the_device_reports(self):
         pd, dev = self.make()
         self.assertEqual(dev.hardware_version, HardwareVersion.SHIMMER3)
-        self.assertIs(dev.hardware_revision, RevisionRegistry.get_revision(HardwareVersion.SHIMMER3))
-        self.assertEqual(str(dev.firmware_type.name), 'LogAndStream')
-        self.assertEqual((dev.firmware_version.major, dev.firmware_version.minor, dev.firmware_version.rel),
-                         (0, 15, 4))
+        self.assertIs(
+            dev.hardware_revision,
+            RevisionRegistry.get_revision(HardwareVersion.SHIMMER3),
+        )
+        self.assertEqual(str(dev.firmware_type.name), "LogAndStream")
+        self.assertEqual(
+            (
+                dev.firmware_version.major,
+                dev.firmware_version.minor,
+                dev.firmware_version.rel,
+            ),
+            (0, 15, 4),
+        )
 
     def test_a_shimmer3r_gets_its_own_revision(self):
         pd, dev = self.make(initialize=False)
         pd.device.hw_version = 10
         dev.initialize()
         self.assertEqual(dev.hardware_version, HardwareVersion.SHIMMER3R)
-        self.assertIs(dev.hardware_revision, RevisionRegistry.get_revision(HardwareVersion.SHIMMER3R))
+        self.assertIs(
+            dev.hardware_revision,
+            RevisionRegistry.get_revision(HardwareVersion.SHIMMER3R),
+        )
 
-    def test_a_hardware_version_without_revision_is_an_error_and_releases_the_port(self):
+    def test_a_hardware_version_without_revision_is_an_error_and_releases_the_port(
+        self,
+    ):
         pd, dev = self.make(initialize=False)
         pd.device.hw_version = 2  # a Shimmer2: no revision for it
 
@@ -826,7 +926,10 @@ class HardwareRevisionTest(_ApiTestCase):
         dev.initialize()
 
         self.assertEqual(dev.hardware_version, HardwareVersion.UNKNOWN)
-        self.assertIs(dev.hardware_revision, RevisionRegistry.get_revision(HardwareVersion.SHIMMER3))
+        self.assertIs(
+            dev.hardware_revision,
+            RevisionRegistry.get_revision(HardwareVersion.SHIMMER3),
+        )
         self.assertEqual(dev.get_sampling_rate(), 32768 / 64)
 
     def test_a_revision_given_by_the_caller_is_kept(self):
@@ -834,7 +937,7 @@ class HardwareRevisionTest(_ApiTestCase):
         self._open.append(pd)
         custom = RevisionRegistry.get_revision(HardwareVersion.SHIMMER3R)
         pd.device.hw_version = 3
-        dev = ShimmerBluetooth(pd.serial, custom, presync=False, crc='off')
+        dev = ShimmerBluetooth(pd.serial, custom, presync=False, crc="off")
         self._devs.append(dev)
 
         dev.initialize()
