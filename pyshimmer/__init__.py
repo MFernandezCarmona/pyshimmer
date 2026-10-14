@@ -16,6 +16,7 @@
 
 from .bluetooth.bt_api import ShimmerBluetooth, CommandRefused
 from .bluetooth.bt_errors import (
+    ShimmerConfigurationError,
     ShimmerError,
     ShimmerLinkError,
     ShimmerTimeoutError,

@@ -39,7 +39,8 @@ adapter; see `shimmer_reliability/RESULTADOS.md` in the workspace for the data.
   fixes, the values marked DO NOT USE, single-shot mode and the 4.033 V reference, which the conversions do not
   support) and compared (`same_configuration()` ignores the bits that belong to the device). New properties:
   `test_signal`, `leadoff_*`, `single_shot`, `vref_volts`. `ExGRegister.test_preset()`.
-  `ShimmerBluetooth.write_exg_register()` writes the ten bytes of a chip and reads them back.
+  `ShimmerBluetooth.write_exg_register()` writes the ten bytes of a chip and reads them back and raises
+  `ShimmerConfigurationError` (a `ShimmerError`) if the chip took something else.
 - `ShimmerBluetooth.get_battery_reading()`: voltage, capacity and the charging status byte of the response
   (`BatteryReading`, `ChargingStatus`). It can be used while streaming; each call costs about 5 packets at 2048 Hz.
 - `ShimmerBluetooth.get_expansion_board()` (`ExpansionBoard`): the identification of the board under the Shimmer3,

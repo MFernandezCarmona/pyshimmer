@@ -71,6 +71,7 @@ from pyshimmer.bluetooth.bt_const import (
 from pyshimmer.bluetooth.bt_crc import CRC_OFF, CRC_2BYTE, crc16, crc_matches
 from pyshimmer.bluetooth.bt_errors import (
     CommandRefused,
+    ShimmerConfigurationError,
     ShimmerError,
     ShimmerLinkError,
     ShimmerTimeoutError,
@@ -1702,12 +1703,12 @@ class ShimmerBluetooth:
             from what was written (the bits that belong to the device are not compared,
             see :meth:`ExGRegister.same_configuration`)
         :return: What the device reports after the write
-        :raises ShimmerError: If the device did not take the configuration
+        :raises ShimmerConfigurationError: If the device did not take the configuration
         """
         self.set_exg_register(chip_id, 0, register.binary)
         back = self.get_exg_register(chip_id)
         if verify and not register.same_configuration(back):
-            raise ShimmerError(
+            raise ShimmerConfigurationError(
                 f"ExG chip {chip_id} did not take the configuration: wrote "
                 f"{fmt_hex(register.binary)}, it reports {fmt_hex(back.binary)}"
             )

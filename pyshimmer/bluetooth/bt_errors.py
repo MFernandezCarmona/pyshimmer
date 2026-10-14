@@ -45,3 +45,10 @@ class CommandRefused(ShimmerError):
     while the device is sensing, a sync mode mismatch, an out-of-range InfoMem or calibration write, and a
     handful of commands it accepts but has never implemented.
     """
+
+
+class ShimmerConfigurationError(ShimmerError):
+    """The device answered, but what it reports is not the configuration that was written to it.
+
+    Unlike a timeout this is deterministic: writing again would give the same result.
+    """

@@ -34,6 +34,7 @@ from pyshimmer.bluetooth.bt_commands import (
 from pyshimmer.bluetooth.bt_crc import crc16, crc_matches
 from pyshimmer.bluetooth.bt_errors import (
     CommandRefused,
+    ShimmerConfigurationError,
     ShimmerConnectError,
     ShimmerError,
     ShimmerLinkError,
@@ -834,7 +835,7 @@ class WriteExGRegisterTest(_ApiTestCase):
         pd, dev = self.make()
         self.acknowledge_without_storing(pd)
 
-        with self.assertRaises(ShimmerError) as ctx:
+        with self.assertRaises(ShimmerConfigurationError) as ctx:
             dev.write_exg_register(0, ExGRegister.emg_preset(rate_sps=4000))
         self.assertIn("did not take the configuration", str(ctx.exception))
 
