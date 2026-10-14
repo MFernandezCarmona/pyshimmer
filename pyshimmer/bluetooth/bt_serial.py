@@ -15,6 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
+import time
+
 from serial import Serial
 
 from pyshimmer.bluetooth.bt_const import (
@@ -128,3 +130,84 @@ class BluetoothSerial(SerialBase):
             else:
                 return self.read_packed(arg_format)
         return ()
+
+
+class IncompleteFrame(Exception):
+    """The bytes a frame needs did not arrive within the time allowed for a single
+    frame"""
+
+
+class FrameView(BluetoothSerial):
+    """A read-only, non-consuming view on the stream that decodes one frame
+    speculatively
+
+    All the read operations of :class:`BluetoothSerial` work on the view but only *peek*
+    into the stream: nothing is taken from it until the owner of the view decides that
+    the frame is valid and reads :attr:`consumed` bytes. A frame that fails validation
+    (CRC, framing) costs a single byte, so the receiver can resynchronize by sliding
+    forward without ever losing the bytes of a valid frame that was mistaken for the
+    tail of a bad one.
+
+    :arg base: The serial interface to look into
+    :arg wait: Seconds to wait for bytes that are missing in the middle of a frame
+        before giving up with :class:`IncompleteFrame`. None blocks until the bytes
+        arrive (or the read is cancelled).
+    """
+
+    def __init__(self, base: BluetoothSerial, wait: float | None = None):
+        # Deliberately no super().__init__(): the view owns no serial of its own.
+        self._base = base
+        self._wait = wait
+        self._pos = 0
+
+    @property
+    def consumed(self) -> int:
+        """The number of bytes the frame decoded so far spans"""
+        return self._pos
+
+    def _ensure(self, end: int, wait: float | None) -> bool:
+        base = self._base
+        if wait is None or base._reader.buffered_len >= end:
+            return True
+
+        deadline = time.monotonic() + wait
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            base.wait_readable(remaining)  # takes the new bytes into the buffer
+            if base._reader.buffered_len >= end:
+                return True
+
+    def read(self, read_len: int) -> bytes:
+        end = self._pos + read_len
+        if not self._ensure(end, self._wait):
+            raise IncompleteFrame(
+                f"Frame needs {read_len} more bytes that did not arrive"
+            )
+
+        data = self._base.peek(end)[self._pos :]
+        self._pos = end
+        return data
+
+    def peek(self, n: int) -> bytes:
+        end = self._pos + n
+        if not self._ensure(end, self._wait):
+            raise IncompleteFrame(f"Frame needs {n} more bytes that did not arrive")
+
+        return self._base.peek(end)[self._pos :]
+
+    def peek_if_available(self, n: int, wait: float) -> bytes | None:
+        """Peek ``n`` bytes ahead, waiting at most ``wait`` seconds for them
+
+        :return: The bytes, or None if they did not arrive in time
+        """
+        end = self._pos + n
+        if not self._ensure(end, wait):
+            return None
+
+        return self._base.peek(end)[self._pos :]
+
+    def raw(self) -> bytes:
+        """All the bytes the frame spans so far"""
+        return self._base.peek(self._pos) if self._pos else b""

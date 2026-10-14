@@ -84,6 +84,15 @@ class FirmwareCapabilities:
             and self._version >= FirmwareVersion(major=0, minor=15, rel=4)
         )
 
+    @property
+    def supports_crc(self) -> bool:
+        """The firmware can append a CRC to every frame (official C# API:
+        CompatibilityCode >= 8)"""
+        return (
+            self._fw_type == FirmwareType.LogAndStream
+            and self._version >= FirmwareVersion(major=0, minor=13, rel=7)
+        )
+
 
 class FirmwareType(IntEnum):
     BtStream = 0x01

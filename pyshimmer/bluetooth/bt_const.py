@@ -88,5 +88,11 @@ STOP_LOGGING_COMMAND = 0x93
 
 ENABLE_STATUS_ACK_COMMAND = 0xA3
 
+# Optional CRC on every frame the device sends, supported by LogAndStream >= 0.13.7. The
+# argument is the number of CRC bytes: 0 (off), 1 or 2. The mode is volatile: it is
+# reset when the Bluetooth connection is closed.
+SET_CRC_COMMAND = 0x8B
+# The acknowledgment of the command already carries the CRC of the *new* mode.
+
 GET_ALL_CALIBRATION_COMMAND = 0x2C
 ALL_CALIBRATION_RESPONSE = 0x2D
