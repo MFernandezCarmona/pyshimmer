@@ -13,10 +13,12 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
+
 import os
 import pty
 from io import BytesIO, RawIOBase, SEEK_END, SEEK_SET
-from typing import Optional, Union, Tuple, BinaryIO
+from typing import BinaryIO
 
 from serial import Serial
 
@@ -44,10 +46,10 @@ class MockSerial(RawIOBase):
 
         self.test_closed = True
 
-    def readinto(self, b: bytearray) -> Optional[int]:
+    def readinto(self, b: bytearray) -> int | None:
         return self._read_buf.readinto(b)
 
-    def write(self, b: Union[bytes, bytearray]) -> Optional[int]:
+    def write(self, b: bytes | bytearray) -> int | None:
         return self._write_buf.write(b)
 
     def reset_input_buffer(self):
@@ -82,33 +84,43 @@ class MockSerial(RawIOBase):
 class PTYSerialMockCreator:
 
     def __init__(self):
-        self._master_fobj = None
-        self._slave_fobj = None
+        self.master_fobj = None
+        self.slave_fobj = None
 
-        self._slave_serial = None
+        self.slave_serial = None
 
     @staticmethod
     def _create_fobj(fd: int) -> BinaryIO:
         # https://bugs.python.org/issue20074
-        fobj = os.fdopen(fd, 'r+b', 0)
+        fobj = os.fdopen(fd, "r+b", 0)
         assert fobj.fileno() == fd
 
         return fobj
 
-    def create_mock(self) -> Tuple[Serial, BinaryIO]:
+    def create_mock(self) -> tuple[Serial, BinaryIO]:
         master_fd, slave_fd = pty.openpty()
 
-        self._master_fobj = self._create_fobj(master_fd)
-        self._slave_fobj = self._create_fobj(slave_fd)
+        self.master_fobj = self._create_fobj(master_fd)
+        self.slave_fobj = self._create_fobj(slave_fd)
 
         # Serial Baud rate is ignored by the driver and can be set to any value
         slave_path = os.ttyname(slave_fd)
-        self._slave_serial = Serial(slave_path, 115200)
+        self.slave_serial = Serial(slave_path, 115200)
 
-        return self._slave_serial, self._master_fobj
+        return self.slave_serial, self.master_fobj
 
     def close(self):
-        self._slave_serial.close()
+        self.slave_serial.close()
 
-        self._master_fobj.close()
-        self._slave_fobj.close()
+        self.master_fobj.close()
+        self.slave_fobj.close()
+
+    def read_from_master(self, n: int) -> bytes:
+        result = bytes()
+        while len(result) < n:
+            result += self.master_fobj.read(n - len(result))
+
+        return result
+
+    def write_to_master(self, data: bytes) -> None:
+        self.master_fobj.write(data)

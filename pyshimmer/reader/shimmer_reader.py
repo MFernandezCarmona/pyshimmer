@@ -11,24 +11,24 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-from abc import ABC, abstractmethod
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-from typing import Dict, List, BinaryIO
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import BinaryIO
 
 import numpy as np
 
-from pyshimmer.dev.base import ticks2sec, dr2sr
-from pyshimmer.dev.channels import ChDataTypeAssignment, get_enabled_channels, EChannelType
-from pyshimmer.dev.exg import is_exg_ch, get_exg_ch, ExGRegister
+from pyshimmer.dev.channels import EChannelType
+from pyshimmer.dev.exg import is_exg_ch, ExGRegister
+from pyshimmer.dev.revisions import HardwareRevision
 from pyshimmer.reader.binary_reader import ShimmerBinaryReader
-from pyshimmer.reader.reader_const import EXG_ADC_REF_VOLT, EXG_ADC_OFFSET, TRIAXCAL_SENSORS
-from pyshimmer.util import unwrap
-
-
-def unwrap_device_timestamps(ts_dev: np.ndarray) -> np.ndarray:
-    ts_dtype = ChDataTypeAssignment[EChannelType.TIMESTAMP]
-    return unwrap(ts_dev, 2 ** (8 * ts_dtype.size))
+from pyshimmer.reader.reader_const import (
+    EXG_ADC_REF_VOLT,
+    EXG_ADC_OFFSET,
+    TRIAXCAL_SENSORS,
+)
 
 
 def fit_linear_1d(xp, fp, x):
@@ -40,19 +40,21 @@ def fit_linear_1d(xp, fp, x):
 class ChannelPostProcessor(ABC):
 
     @abstractmethod
-    def process(self, channels: Dict[EChannelType, np.ndarray], reader: ShimmerBinaryReader) -> \
-            Dict[EChannelType, np.ndarray]:
+    def process(
+        self, channels: dict[EChannelType, np.ndarray], reader: ShimmerBinaryReader
+    ) -> dict[EChannelType, np.ndarray]:
         pass
 
 
 class SingleChannelProcessor(ChannelPostProcessor, ABC):
 
-    def __init__(self, ch_types: List[EChannelType] = None):
+    def __init__(self, ch_types: list[EChannelType] = None):
         super().__init__()
         self._ch_types = ch_types
 
-    def process(self, channels: Dict[EChannelType, np.ndarray], reader: ShimmerBinaryReader) -> \
-            Dict[EChannelType, np.ndarray]:
+    def process(
+        self, channels: dict[EChannelType, np.ndarray], reader: ShimmerBinaryReader
+    ) -> dict[EChannelType, np.ndarray]:
 
         if self._ch_types is None:
             ch_types = list(channels.keys())
@@ -66,7 +68,9 @@ class SingleChannelProcessor(ChannelPostProcessor, ABC):
         return result
 
     @abstractmethod
-    def process_channel(self, ch_type: EChannelType, y: np.ndarray, reader: ShimmerBinaryReader) -> np.ndarray:
+    def process_channel(
+        self, ch_type: EChannelType, y: np.ndarray, reader: ShimmerBinaryReader
+    ) -> np.ndarray:
         pass
 
 
@@ -76,12 +80,16 @@ class ExGProcessor(SingleChannelProcessor):
         exg_channels = [t for t in EChannelType if is_exg_ch(t)]
         super().__init__(exg_channels)
 
-    def process_channel(self, ch_type: EChannelType, y: np.ndarray, reader: ShimmerBinaryReader) -> np.ndarray:
-        chip_id, ch_id = get_exg_ch(ch_type)
+    def process_channel(
+        self, ch_type: EChannelType, y: np.ndarray, reader: ShimmerBinaryReader
+    ) -> np.ndarray:
+        rev = reader.hardware_revision
+
+        chip_id, ch_id = rev.get_exg_chip_and_channel(ch_type)
         exg_reg = reader.get_exg_reg(chip_id)
         gain = exg_reg.get_ch_gain(ch_id)
 
-        ch_dtype = ChDataTypeAssignment[ch_type]
+        ch_dtype = rev.get_channel_dtype(ch_type)
         resolution = 8 * ch_dtype.size
         sensitivity = EXG_ADC_REF_VOLT / (2 ** (resolution - 1) - 1)
 
@@ -93,22 +101,25 @@ class ExGProcessor(SingleChannelProcessor):
 class PPGProcessor(SingleChannelProcessor):
 
     def __init__(self):
-        super().__init__([EChannelType.INTERNAL_ADC_13])
+        super().__init__([EChannelType.INTERNAL_ADC_A1])
 
-    def process_channel(self, ch_type: EChannelType, y: np.ndarray, reader: ShimmerBinaryReader) -> np.ndarray:
+    def process_channel(
+        self, ch_type: EChannelType, y: np.ndarray, reader: ShimmerBinaryReader
+    ) -> np.ndarray:
         # Convert from mV to V
         return y / 1000.0
 
 
 class TriAxCalProcessor(ChannelPostProcessor):
 
-    def process(self, channels: Dict[EChannelType, np.ndarray], reader: ShimmerBinaryReader) -> \
-            Dict[EChannelType, np.ndarray]:
+    def process(
+        self, channels: dict[EChannelType, np.ndarray], reader: ShimmerBinaryReader
+    ) -> dict[EChannelType, np.ndarray]:
         result = channels.copy()
 
         active_sensors = [s for s in reader.enabled_sensors if s in TRIAXCAL_SENSORS]
         for sensor in active_sensors:
-            sensor_channels = get_enabled_channels([sensor])
+            sensor_channels = reader.hardware_revision.get_enabled_channels([sensor])
             channel_data = np.stack([channels[c] for c in sensor_channels])
             o, g, a = reader.get_triaxcal_params(sensor)
 
@@ -123,14 +134,22 @@ class TriAxCalProcessor(ChannelPostProcessor):
 
 class ShimmerReader:
 
-    def __init__(self, fp: BinaryIO = None, bin_reader: ShimmerBinaryReader = None,
-                 sync: bool = True, post_process: bool = True, processors: List[ChannelPostProcessor] = None):
+    def __init__(
+        self,
+        fp: BinaryIO = None,
+        bin_reader: ShimmerBinaryReader = None,
+        sync: bool = True,
+        post_process: bool = True,
+        processors: list[ChannelPostProcessor] = None,
+    ):
         if fp is not None:
             self._bin_reader = ShimmerBinaryReader(fp)
         elif bin_reader is not None:
             self._bin_reader = bin_reader
         else:
-            raise ValueError('Need to provide file object or binary reader as parameter.')
+            raise ValueError(
+                "Need to provide file object or binary reader as parameter."
+            )
 
         self._ts = None
         self._ch_samples = {}
@@ -147,7 +166,9 @@ class ShimmerReader:
             ]
 
     @staticmethod
-    def _apply_synchronization(data_ts: np.ndarray, offset_index: np.ndarray, offsets: np.ndarray):
+    def _apply_synchronization(
+        data_ts: np.ndarray, offset_index: np.ndarray, offsets: np.ndarray
+    ):
         # We discard all synchronization offsets for which we do not possess timestamps.
         index_safe = offset_index[offset_index < len(data_ts)]
 
@@ -158,9 +179,9 @@ class ShimmerReader:
         return aligned_ts
 
     def _apply_clock_offsets(self, ts: np.ndarray):
-        # First, we need calculate absolute timestamps relative to the boot-up time of the Shimmer.
-        # In order to do so, we use the 40bit initial timestamp to calculate an offset to apply to
-        # each timestamp.
+        # First, we need calculate absolute timestamps relative to the boot-up time of
+        # the Shimmer. In order to do so, we use the 40bit initial timestamp to
+        # calculate an offset to apply to each timestamp.
         boot_offset = self._bin_reader.start_timestamp - ts[0]
         ts_boot = ts + boot_offset
 
@@ -169,7 +190,9 @@ class ShimmerReader:
         else:
             return ts_boot
 
-    def _process_signals(self, channels: Dict[EChannelType, np.ndarray]) -> Dict[EChannelType, np.ndarray]:
+    def _process_signals(
+        self, channels: dict[EChannelType, np.ndarray]
+    ) -> dict[EChannelType, np.ndarray]:
         result = channels.copy()
 
         for processor in self._processors:
@@ -181,7 +204,7 @@ class ShimmerReader:
         samples, sync_offsets = self._bin_reader.read_data()
         ts_raw = samples.pop(EChannelType.TIMESTAMP)
 
-        ts_unwrapped = unwrap_device_timestamps(ts_raw)
+        ts_unwrapped = self.hardware_revision.unwrap_device_timestamps(ts_raw)
         ts_sane = self._apply_clock_offsets(ts_unwrapped)
 
         if self._sync and self._bin_reader.has_sync:
@@ -192,7 +215,7 @@ class ShimmerReader:
         else:
             self._ch_samples = samples
 
-        self._ts = ticks2sec(ts_sane)
+        self._ts = self.hardware_revision.ticks2sec(ts_sane)
 
     def get_exg_reg(self, chip_id: int) -> ExGRegister:
         return self._bin_reader.get_exg_reg(chip_id)
@@ -204,17 +227,21 @@ class ShimmerReader:
         return self._ch_samples[item]
 
     @property
+    def hardware_revision(self) -> HardwareRevision:
+        return self._bin_reader.hardware_revision
+
+    @property
     def timestamp(self) -> np.ndarray:
         return self._ts
 
     @property
-    def channels(self) -> List[EChannelType]:
+    def channels(self) -> list[EChannelType]:
         # We return all but the first channel which are the timestamps
         return self._bin_reader.enabled_channels[1:]
 
     @property
     def sample_rate(self) -> float:
-        return dr2sr(self._bin_reader.sample_rate)
+        return self.hardware_revision.dr2sr(self._bin_reader.sample_rate)
 
     @property
     def exg_reg1(self) -> ExGRegister:

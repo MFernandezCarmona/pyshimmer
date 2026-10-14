@@ -13,35 +13,51 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
+
 import struct
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Union, Iterable
+from collections.abc import Iterable
 
 from pyshimmer.bluetooth.bt_const import *
 from pyshimmer.bluetooth.bt_serial import BluetoothSerial
-
-from pyshimmer.dev.base import dr2sr, sr2dr, sec2ticks, ticks2sec
-from pyshimmer.dev.channels import ChannelDataType, EChannelType, ESensorGroup, serialize_sensorlist
-from pyshimmer.dev.exg import ExGRegister
 from pyshimmer.dev.calibration import AllCalibration
-from pyshimmer.dev.fw_version import HardwareVersion, get_firmware_type
-
-from pyshimmer.util import bit_is_set, resp_code_to_bytes, calibrate_u12_adc_value, battery_voltage_to_percent
+from pyshimmer.dev.channels import (
+    ChannelDataType,
+    EChannelType,
+    ESensorGroup,
+)
+from pyshimmer.dev.exg import ExGRegister
+from pyshimmer.dev.fw_version import FirmwareType
+from pyshimmer.dev.revisions import HardwareRevision, HardwareVersion
+from pyshimmer.util import (
+    bit_is_set,
+    resp_code_to_bytes,
+    calibrate_u12_adc_value,
+    battery_voltage_to_percent,
+)
 
 
 class DataPacket:
-    """Parses data packets received by the Shimmer device
 
-    :arg stream_types: List of tuples that contains each data channel contained in the data packet as well as the
-        corresponding data type decoder
-    """
+    def __init__(
+        self,
+        rev: HardwareRevision,
+        stream_types: list[tuple[EChannelType, ChannelDataType]],
+    ):
+        """Parses data packets received by the Shimmer device
 
-    def __init__(self, stream_types: List[Tuple[EChannelType, ChannelDataType]]):
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param stream_types: List of tuples that contains each data channel contained in the
+            data packet as well as the corresponding data type decoder
+        """
+        self._rev = rev
         self._types = stream_types
         self._values = {}
 
     @property
-    def channels(self) -> List[EChannelType]:
+    def channels(self) -> list[EChannelType]:
         """The data channels present in this data packet
 
         :return: The channels as list
@@ -49,7 +65,7 @@ class DataPacket:
         return [t for t, _ in self._types]
 
     @property
-    def channel_types(self) -> List[ChannelDataType]:
+    def channel_types(self) -> list[ChannelDataType]:
         """The channel data types that represent the binary data of each channel
 
         :return: The data types as list
@@ -77,20 +93,27 @@ class DataPacket:
 
 
 class ShimmerCommand(ABC):
-    """Abstract base class that represents a command sent to the Shimmer
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Abstract base class that represents a command sent to the Shimmer
+
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        self._rev = rev
 
     @abstractmethod
     def send(self, ser: BluetoothSerial) -> None:
-        """Encodes the command and sends it to the Shimmer via the provided serial interface
+        """Encodes the command and sends it to the Shimmer via the provided serial
+        interface
 
         :param ser: The serial to use for sending the command
         """
         pass
 
     def has_response(self) -> bool:
-        """Specifies if the command has a response that needs to be read from the return stream
+        """Specifies if the command has a response that needs to be read from the
+        return stream
 
         :return: True if the command has a response, else false
         """
@@ -99,7 +122,8 @@ class ShimmerCommand(ABC):
     def get_response_code(self) -> bytes:
         """The response code of the command
 
-        :return: The response code as a series of bytes, is normally one or two bytes long
+        :return: The response code as a series of bytes, is normally one or two
+            bytes long
         """
         return bytes()
 
@@ -113,13 +137,17 @@ class ShimmerCommand(ABC):
 
 
 class ResponseCommand(ShimmerCommand, ABC):
-    """Abstract base class for all commands that feature a command response
 
-    :arg rcode: The response code of the response. Can be a single int for a single-byte response code or
-        a tuple of ints or a bytes instance for a multi-byte response code
-    """
+    def __init__(self, rev: HardwareRevision, rcode: int | bytes | tuple[int, ...]):
+        """Abstract base class for all commands that feature a command response
 
-    def __init__(self, rcode: Union[int, Tuple[int, ...], bytes]):
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param rcode: The response code of the response. Can be a single int for a
+            single-byte response code or a tuple of ints or a bytes instance for a
+            multi-byte response code
+        """
+        super().__init__(rev)
         self._rcode = resp_code_to_bytes(rcode)
 
     def has_response(self) -> bool:
@@ -130,12 +158,15 @@ class ResponseCommand(ShimmerCommand, ABC):
 
 
 class OneShotCommand(ShimmerCommand):
-    """Class for commands that only send a command code and have no response
 
-    :arg cmd_code: The command code to send
-    """
+    def __init__(self, rev: HardwareRevision, cmd_code: int):
+        """Class for commands that only send a command code and have no response
 
-    def __init__(self, cmd_code: int):
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param cmd_code: The command code to send
+        """
+        super().__init__(rev)
         self._code = cmd_code
 
     def send(self, ser: BluetoothSerial) -> None:
@@ -143,15 +174,23 @@ class OneShotCommand(ShimmerCommand):
 
 
 class GetStringCommand(ResponseCommand):
-    """Send a command that features a variable-length string as response
 
-    :arg req_code: The command code of the request
-    :arg resp_code: The response code
-    :arg encoding: The encoding to use when reading the response string
-    """
+    def __init__(
+        self,
+        rev: HardwareRevision,
+        req_code: int,
+        resp_code: int | bytes | tuple[int],
+        encoding: str = "utf8",
+    ):
+        """Send a command that features a variable-length string as response
 
-    def __init__(self, req_code: int, resp_code: Union[int, Tuple[int], bytes], encoding: str = 'utf8'):
-        super().__init__(resp_code)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param req_code: The command code of the request
+        :param resp_code: The response code
+        :param encoding: The encoding to use when reading the response string
+        """
+        super().__init__(rev, resp_code)
         self._req_code = req_code
         self._encoding = encoding
 
@@ -159,69 +198,83 @@ class GetStringCommand(ResponseCommand):
         ser.write_command(self._req_code)
 
     def receive(self, ser: BluetoothSerial) -> any:
-        str_bin = ser.read_response(self._rcode, 'varlen')
+        str_bin = ser.read_response(self._rcode, "varlen")
         return str_bin.decode(self._encoding)
 
 
 class SetStringCommand(ShimmerCommand):
-    """A command for sending a variable-length string to the device
 
-    :arg req_code: The code of the command request
-    :arg str_data: The data to send as part of the request
-    :arg encoding: The encoding to use when writing the data to the stream
-    """
+    def __init__(
+        self,
+        rev: HardwareRevision,
+        req_code: int,
+        str_data: str,
+        encoding: str = "utf8",
+    ):
+        """A command for sending a variable-length string to the device
 
-    def __init__(self, req_code: int, str_data: str, encoding: str = 'utf8'):
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param req_code: The code of the command request
+        :param str_data: The data to send as part of the request
+        :param encoding: The encoding to use when writing the data to the stream
+        """
+        super().__init__(rev)
         self._req_code = req_code
         self._str_data = str_data
         self._encoding = encoding
 
     def send(self, ser: BluetoothSerial) -> None:
         str_bin = self._str_data.encode(self._encoding)
-        ser.write_command(self._req_code, 'varlen', str_bin)
+        ser.write_command(self._req_code, "varlen", str_bin)
 
 
 class GetSamplingRateCommand(ResponseCommand):
-    """Retrieve the sampling rate in samples per second
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Retrieve the sampling rate in samples per second
 
-    def __init__(self):
-        super().__init__(SAMPLING_RATE_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, SAMPLING_RATE_RESPONSE)
 
     def send(self, ser: BluetoothSerial) -> None:
         ser.write_command(GET_SAMPLING_RATE_COMMAND)
 
     def receive(self, ser: BluetoothSerial) -> float:
-        sr_clock = ser.read_response(SAMPLING_RATE_RESPONSE, arg_format='<H')
-        sr = dr2sr(sr_clock)
+        sr_clock = ser.read_response(SAMPLING_RATE_RESPONSE, arg_format="<H")
+        sr = self._rev.dr2sr(sr_clock)
         return sr
 
 
 class SetSamplingRateCommand(ShimmerCommand):
 
-    def __init__(self, sr: float):
+    def __init__(self, rev: HardwareRevision, sr: float):
+        super().__init__(rev)
         self._sr = sr
 
     def send(self, ser: BluetoothSerial) -> None:
-        dr = sr2dr(self._sr)
+        dr = self._rev.sr2dr(self._sr)
         ser.write_command(SET_SAMPLING_RATE_COMMAND, "<H", dr)
 
 
 class GetBatteryCommand(ResponseCommand):
-    """Retrieve the battery state
 
-    """
+    def __init__(self, rev: HardwareRevision, in_percent: bool):
+        """Retrieve the battery state
 
-    def __init__(self, in_percent: bool):
-        super().__init__(FULL_BATTERY_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, FULL_BATTERY_RESPONSE)
         self._in_percent = in_percent
 
     def send(self, ser: BluetoothSerial) -> None:
         ser.write_command(GET_BATTERY_COMMAND)
 
     def receive(self, ser: BluetoothSerial) -> any:
-        batt = ser.read_response(self.get_response_code(), arg_format='BBB')
+        batt = ser.read_response(self.get_response_code(), arg_format="BBB")
         # Calculation see:
         # http://shimmersensing.com/wp-content/docs/support/documentation/LogAndStream_for_Shimmer3_Firmware_User_Manual_rev0.11a.pdf (Page 17)
         # https://shimmersensing.com/wp-content/docs/support/documentation/Shimmer_User_Manual_rev3p.pdf (Page 53)
@@ -234,72 +287,82 @@ class GetBatteryCommand(ResponseCommand):
 
 
 class GetConfigTimeCommand(ResponseCommand):
-    """Retrieve the config time that is stored in the Shimmer device configuration file
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Retrieve the config time that is stored in the Shimmer device
+        configuration file
 
-    def __init__(self):
-        super().__init__(CONFIGTIME_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, CONFIGTIME_RESPONSE)
 
     def send(self, ser: BluetoothSerial) -> None:
         ser.write_command(GET_CONFIGTIME_COMMAND)
 
     def receive(self, ser: BluetoothSerial) -> any:
-        r = ser.read_response(CONFIGTIME_RESPONSE, arg_format='varlen')
+        r = ser.read_response(CONFIGTIME_RESPONSE, arg_format="varlen")
         return int(r)
 
 
 class SetConfigTimeCommand(ShimmerCommand):
-    """Set the config time, which will be stored in the Shimmer device configuration file
 
-    :arg time: The integer value to send
-    """
+    def __init__(self, rev: HardwareRevision, time: int):
+        """Set the config time, which will be stored in the Shimmer device
+        configuration file
 
-    def __init__(self, time: int):
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param time: The integer value to send
+        """
+        super().__init__(rev)
         self._time = time
 
     def send(self, ser: BluetoothSerial) -> None:
-        time_str = '{:d}'.format(int(self._time))
-        time_bin = time_str.encode('ascii')
+        time_str = "{:d}".format(int(self._time))
+        time_bin = time_str.encode("ascii")
 
         ser.write_command(SET_CONFIGTIME_COMMAND, "varlen", time_bin)
 
 
 class GetRealTimeClockCommand(ResponseCommand):
-    """
-    Get the real-time clock as UNIX Timestamp in seconds
-    """
 
-    def __init__(self):
-        super().__init__(RWC_RESPONSE)
+    def __init__(self, rev: HardwareRevision):
+        """Get the real-time clock as UNIX Timestamp in seconds
+
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, RWC_RESPONSE)
 
     def send(self, ser: BluetoothSerial) -> None:
         ser.write_command(GET_RWC_COMMAND)
 
     def receive(self, ser: BluetoothSerial) -> float:
         t_ticks = ser.read_response(RWC_RESPONSE, arg_format="<Q")
-        return ticks2sec(t_ticks)
+        return self._rev.ticks2sec(t_ticks)
 
 
 class SetRealTimeClockCommand(ShimmerCommand):
-    """
-    Set the real-time clock as UNIX timestamp in seconds
 
-    :arg ts_sec: The UNIX timestamp in seconds
-    """
+    def __init__(self, rev: HardwareRevision, ts_sec: float):
+        """
+        Set the real-time clock as UNIX timestamp in seconds
 
-    def __init__(self, ts_sec: float):
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param ts_sec: The UNIX timestamp in seconds
+        """
+        super().__init__(rev)
         self._time = int(ts_sec)
 
     def send(self, ser: BluetoothSerial) -> None:
-        t_ticks = sec2ticks(self._time)
-        ser.write_command(SET_RWC_COMMAND, '<Q', t_ticks)
+        t_ticks = self._rev.sec2ticks(self._time)
+        ser.write_command(SET_RWC_COMMAND, "<Q", t_ticks)
 
 
 class GetStatusCommand(ResponseCommand):
-    """Retrieve the current status of the device
 
-    """
     STATUS_DOCKED_BF = 1 << 0
     STATUS_SENSING_BF = 1 << 1
     STATUS_RTC_SET_BF = 1 << 2
@@ -308,13 +371,26 @@ class GetStatusCommand(ResponseCommand):
     STATUS_SD_PRESENT_BF = 1 << 5
     STATUS_SD_ERROR_BF = 1 << 6
     STATUS_RED_LED_BF = 1 << 7
-    STATUS_BITFIELDS = (STATUS_DOCKED_BF, STATUS_SENSING_BF, STATUS_RTC_SET_BF, STATUS_LOGGING_BF, STATUS_STREAMING_BF,
-                        STATUS_SD_PRESENT_BF, STATUS_SD_ERROR_BF, STATUS_RED_LED_BF)
+    STATUS_BITFIELDS = (
+        STATUS_DOCKED_BF,
+        STATUS_SENSING_BF,
+        STATUS_RTC_SET_BF,
+        STATUS_LOGGING_BF,
+        STATUS_STREAMING_BF,
+        STATUS_SD_PRESENT_BF,
+        STATUS_SD_ERROR_BF,
+        STATUS_RED_LED_BF,
+    )
 
-    def __init__(self):
-        super().__init__(FULL_STATUS_RESPONSE)
+    def __init__(self, rev: HardwareRevision):
+        """Retrieve the current status of the device
 
-    def unpack_status_bitfields(self, val: int) -> List[bool]:
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, FULL_STATUS_RESPONSE)
+
+    def unpack_status_bitfields(self, val: int) -> list[bool]:
         values = [bit_is_set(val, f) for f in self.STATUS_BITFIELDS]
         return values
 
@@ -322,44 +398,51 @@ class GetStatusCommand(ResponseCommand):
         ser.write_command(GET_STATUS_COMMAND)
 
     def receive(self, ser: BluetoothSerial) -> any:
-        bitfields = ser.read_response(self.get_response_code(), arg_format='B')
+        bitfields = ser.read_response(self.get_response_code(), arg_format="B")
         return self.unpack_status_bitfields(bitfields)
 
 
 class GetFirmwareVersionCommand(ResponseCommand):
-    """Retrieve the firmware type and version
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Retrieve the firmware type and version
 
-    def __init__(self):
-        super().__init__(FW_VERSION_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, FW_VERSION_RESPONSE)
 
     def send(self, ser: BluetoothSerial) -> None:
         ser.write_command(GET_FW_VERSION_COMMAND)
 
     def receive(self, ser: BluetoothSerial) -> any:
         fw_type_bin, major, minor, rel = ser.read_response(
-            FW_VERSION_RESPONSE, arg_format='<HHBB')
-        fw_type = get_firmware_type(fw_type_bin)
+            FW_VERSION_RESPONSE, arg_format="<HHBB"
+        )
+        fw_type = FirmwareType.from_int(fw_type_bin)
         return fw_type, major, minor, rel
 
 
 class GetAllCalibrationCommand(ResponseCommand):
-    """ Returns all the stored calibration values (84 bytes) in the following order:
+
+    def __init__(self, rev: HardwareRevision):
+        """Returns all the stored calibration values (84 bytes) in the following order:
 
             ESensorGroup.ACCEL_LN (21 bytes)
             ESensorGroup.GYRO     (21 bytes)
             ESensorGroup.MAG      (21 bytes)
-            ESensorGroup.ACCEL_WR (21 bytes)        
+            ESensorGroup.ACCEL_WR (21 bytes)
 
-        The breakdown of the kinematic (accel x 2, gyro and mag) calibration values is as follows:
-            [bytes  0- 5] offset bias values: 3 (x,y,z) 16-bit signed integers (big endian). 
-            [bytes  6-11] sensitivity values: 3 (x,y,z) 16-bit signed integers (big endian). 
+        The breakdown of the kinematic (accel x 2, gyro and mag) calibration values is
+        as follows:
+            [bytes  0- 5] offset bias values: 3 (x,y,z) 16-bit signed integers (big endian).
+            [bytes  6-11] sensitivity values: 3 (x,y,z) 16-bit signed integers (big endian).
             [bytes 12-20] alignment matrix:  9 values    8-bit signed integers.
-    """
 
-    def __init__(self):
-        super().__init__(ALL_CALIBRATION_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, ALL_CALIBRATION_RESPONSE)
 
         self._offset = 0x0
         self._rlen = 0x54  # 84 bytes
@@ -374,17 +457,23 @@ class GetAllCalibrationCommand(ResponseCommand):
 
 
 class InquiryCommand(ResponseCommand):
-    """Perform an inquiry to determine the sample rate, buffer size, and active data channels
 
-    """
+    def __init__(self, rev: HardwareRevision, response_format: str):
+        """Perform an inquiry to determine the sample rate, buffer size,
+        and active data channels
 
-    def __init__(self):
-        super().__init__(INQUIRY_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param response_format: The struct format to use for unpacking the
+            response
+        """
+        super().__init__(rev, INQUIRY_RESPONSE)
+        self._response_format = response_format
 
     @staticmethod
-    def decode_channel_types(ct_bin: bytes) -> List[EChannelType]:
-        ctypes_index = struct.unpack('B' * len(ct_bin), ct_bin)
-        ctypes = [BtChannelsByIndex[i] for i in ctypes_index]
+    def decode_channel_types(ct_bin: bytes) -> list[EChannelType]:
+        ctypes_index = struct.unpack("B" * len(ct_bin), ct_bin)
+        ctypes = [EChannelType.enum_for_id(i) for i in ctypes_index]
         return ctypes
 
     def send(self, ser: BluetoothSerial) -> None:
@@ -392,148 +481,182 @@ class InquiryCommand(ResponseCommand):
 
     def receive(self, ser: BluetoothSerial) -> any:
         sr_val, _, n_ch, buf_size = ser.read_response(
-            INQUIRY_RESPONSE, arg_format='<HIBB')
+            INQUIRY_RESPONSE, arg_format=self._response_format
+        )
         channel_conf = ser.read(n_ch)
 
-        sr = dr2sr(sr_val)
+        sr = self._rev.dr2sr(sr_val)
         ctypes = self.decode_channel_types(channel_conf)
 
         return sr, buf_size, ctypes
 
 
+class Shimmer3InquiryCommand(InquiryCommand):
+
+    def __init__(self, rev: HardwareRevision):
+        super().__init__(rev, response_format="<HIBB")
+
+
+class Shimmer3RInquiryCommand(InquiryCommand):
+
+    def __init__(self, rev: HardwareRevision):
+        super().__init__(rev, response_format="<HI3xBB")
+
+
 class StartStreamingCommand(OneShotCommand):
-    """Start streaming data over the Bluetooth channel
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Start streaming data over the Bluetooth channel
 
-    def __init__(self):
-        super().__init__(START_STREAMING_COMMAND)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, START_STREAMING_COMMAND)
 
 
 class StopStreamingCommand(OneShotCommand):
-    """Stop streaming data over the Bluetooth channel
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Stop streaming data over the Bluetooth channel
 
-    def __init__(self):
-        super().__init__(STOP_STREAMING_COMMAND)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, STOP_STREAMING_COMMAND)
 
 
 class GetEXGRegsCommand(ResponseCommand):
-    """Retrieve the current state of the ExG chip register
 
-    Queries the values of all registers of the specified chip and returns it as an ExGRegister instance
+    def __init__(self, rev: HardwareRevision, chip_id: int):
+        """Retrieve the current state of the ExG chip register
 
-    :arg chip_id: The chip id, can be one of [0, 1]
-    """
+        Queries the values of all registers of the specified chip and returns it as an
+        ExGRegister instance
 
-    def __init__(self, chip_id: int):
-        super().__init__(EXG_REGS_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param chip_id: The chip id, can be one of [0, 1]
+        """
+        super().__init__(rev, EXG_REGS_RESPONSE)
 
         self._chip = chip_id
         self._offset = 0x0
         self._rlen = 0xA
 
     def send(self, ser: BluetoothSerial) -> None:
-        ser.write_command(GET_EXG_REGS_COMMAND, 'BBB',
-                          self._chip, self._offset, self._rlen)
+        ser.write_command(
+            GET_EXG_REGS_COMMAND, "BBB", self._chip, self._offset, self._rlen
+        )
 
     def receive(self, ser: BluetoothSerial) -> any:
-        rlen = ser.read_response(EXG_REGS_RESPONSE, arg_format='B')
+        rlen = ser.read_response(EXG_REGS_RESPONSE, arg_format="B")
         if not rlen == self._rlen:
-            raise ValueError(
-                'Response does not contain required amount of bytes')
+            raise ValueError("Response does not contain required amount of bytes")
 
         reg_data = ser.read(rlen)
         return ExGRegister(reg_data)
 
 
 class SetEXGRegsCommand(ShimmerCommand):
-    """Set the binary contents of the ExG registers of a chip
 
-    :arg chip_id: The id of the chip, can be one of [0, 1]
-    :arg offset: At which offset to write the data
-    :arg data: The bytes to write to the registers
-    """
+    def __init__(self, rev: HardwareRevision, chip_id: int, offset: int, data: bytes):
+        """Set the binary contents of the ExG registers of a chip
 
-    def __init__(self, chip_id: int, offset: int, data: bytes):
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param chip_id: The id of the chip, can be one of [0, 1]
+        :param offset: At which offset to write the data
+        :param data: The bytes to write to the registers
+        """
+        super().__init__(rev)
         self._chip = chip_id
         self._offset = offset
         self._data = data
 
     def send(self, ser: BluetoothSerial) -> None:
         dlen = len(self._data)
-        ser.write_command(SET_EXG_REGS_COMMAND, 'BBB',
-                          self._chip, self._offset, dlen)
+        ser.write_command(SET_EXG_REGS_COMMAND, "BBB", self._chip, self._offset, dlen)
         ser.write(self._data)
 
 
 class GetExperimentIDCommand(GetStringCommand):
-    """Retrieve the experiment id
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Retrieve the experiment ID
 
-    def __init__(self):
-        super().__init__(GET_EXPID_COMMAND, EXPID_RESPONSE)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, GET_EXPID_COMMAND, EXPID_RESPONSE)
 
 
 class SetExperimentIDCommand(SetStringCommand):
-    """Set the experiment id
 
-    :arg exp_id: The experiment id as string
-    """
+    def __init__(self, rev: HardwareRevision, exp_id: str):
+        """Set the experiment ID
 
-    def __init__(self, exp_id: str):
-        super().__init__(SET_EXPID_COMMAND, exp_id)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param exp_id: The experiment id as string
+        """
+        super().__init__(rev, SET_EXPID_COMMAND, exp_id)
 
 
 class SetSensorsCommand(ShimmerCommand):
 
-    def __init__(self, sensors: Iterable[ESensorGroup]):
+    def __init__(self, rev: HardwareRevision, sensors: Iterable[ESensorGroup]):
+        super().__init__(rev)
         self._sensors = list(sensors)
 
     def send(self, ser: BluetoothSerial) -> None:
-        bitfield_bin = serialize_sensorlist(self._sensors)
+        bitfield_bin = self._rev.serialize_sensorlist(self._sensors)
         ser.write_command(SET_SENSORS_COMMAND, "<3s", bitfield_bin)
 
 
 class GetDeviceNameCommand(GetStringCommand):
-    """Get the device name
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Get the device name
 
-    def __init__(self):
-        super().__init__(GET_SHIMMERNAME_COMMAND, SHIMMERNAME_RESPONSE)     
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, GET_SHIMMERNAME_COMMAND, SHIMMERNAME_RESPONSE)
 
 
 class GetShimmerHardwareVersion(ResponseCommand):
-    """Get the device hardware version
-    
-    """
-    def __init__(self):
-        super().__init__(SHIMMER_VERSION_RESPONSE)
-        
+
+    def __init__(self, rev: HardwareRevision):
+        """Get the device hardware version
+
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, SHIMMER_VERSION_RESPONSE)
+
     def send(self, ser: BluetoothSerial) -> None:
         ser.write_command(GET_SHIMMER_VERSION_COMMAND)
-        
+
     def receive(self, ser: BluetoothSerial) -> any:
-        hw_version = ser.read_response(SHIMMER_VERSION_RESPONSE, arg_format='<B')
+        hw_version = ser.read_response(SHIMMER_VERSION_RESPONSE, arg_format="<B")
         return HardwareVersion.from_int(hw_version)
 
 
 class SetDeviceNameCommand(SetStringCommand):
-    """Set the device name
 
-    :arg dev_name: The new device name as string
-    """
+    def __init__(self, rev: HardwareRevision, dev_name: str):
+        """Set the device name
 
-    def __init__(self, dev_name: str):
-        super().__init__(SET_SHIMMERNAME_COMMAND, dev_name)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param dev_name: The new device name as string
+        """
+        super().__init__(rev, SET_SHIMMERNAME_COMMAND, dev_name)
 
 
 class SetStatusAckCommand(ShimmerCommand):
 
-    def __init__(self, enabled: bool):
+    def __init__(self, rev: HardwareRevision, enabled: bool):
         """Command to enable/disable the ACK byte before status messages
 
         By default, the Shimmer firmware sends an acknowledgment byte before
@@ -542,9 +665,12 @@ class SetStatusAckCommand(ShimmerCommand):
         software. This command is used by the Python API to automatically disable
         the acknowledgment when connecting to a Shimmer.
 
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
         :param enabled: If set to True, the acknowledgment is sent. If set to False,
             the acknowledgment is not sent.
         """
+        super().__init__(rev)
         self._enabled = enabled
 
     def send(self, ser: BluetoothSerial) -> None:
@@ -552,27 +678,34 @@ class SetStatusAckCommand(ShimmerCommand):
 
 
 class StartLoggingCommand(OneShotCommand):
-    """Begin logging data to the SD card
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Begin logging data to the SD card
 
-    def __init__(self):
-        super().__init__(START_LOGGING_COMMAND)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, START_LOGGING_COMMAND)
 
 
 class StopLoggingCommand(OneShotCommand):
-    """End logging data to the SD card
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """End logging data to the SD card
 
-    def __init__(self):
-        super().__init__(STOP_LOGGING_COMMAND)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, STOP_LOGGING_COMMAND)
 
 
 class DummyCommand(OneShotCommand):
-    """Dummy command that is only acknowledged by the Shimmer but triggers no response
 
-    """
+    def __init__(self, rev: HardwareRevision):
+        """Dummy command that is only acknowledged by the Shimmer but
+        triggers no response
 
-    def __init__(self):
-        super().__init__(DUMMY_COMMAND)
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        """
+        super().__init__(rev, DUMMY_COMMAND)
