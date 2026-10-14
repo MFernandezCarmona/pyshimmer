@@ -1270,6 +1270,38 @@ class ShimmerBluetooth:
             except ShimmerTimeoutError:
                 pass
 
+    def set_crc(self, crc_len: int) -> None:
+        """Change the CRC mode of an initialized link
+
+        The mode is chosen with the ``crc`` argument when the link is created. This is for a caller that only
+        knows what the stream will be like after it has read the device (it may be too fast for the CRC bytes).
+        It must be called while the device is not streaming, because the packets of a stream are framed with the
+        mode in force when they were sent.
+
+        :param crc_len: The number of CRC bytes of every frame: 0, 1 or 2
+        :raises ValueError: If the length is not one of those, or the firmware has no CRC mode
+        :raises ShimmerError: If the device is streaming or did not confirm the mode (the previous mode is back)
+        """
+        if crc_len not in (CRC_OFF, 1, CRC_2BYTE):
+            raise ValueError(f"CRC length must be 0, 1 or 2, not {crc_len}")
+        if crc_len != CRC_OFF and not self.capabilities.supports_crc:
+            raise ValueError("This firmware has no CRC mode")
+        if self._streaming:
+            raise ShimmerError(
+                "The CRC mode cannot be changed while the device streams"
+            )
+
+        previous = self._bluetooth.crc_len
+        if crc_len == previous:
+            return
+        # The acknowledgment of this very command carries the CRC of the new mode: switch the receiver first
+        self._bluetooth.set_crc_len(crc_len)
+        try:
+            self._process_and_wait(SetCrcCommand(self._revision, crc_len))
+        except ShimmerError:
+            self._bluetooth.set_crc_len(previous)
+            raise
+
     def initialize(self) -> None:
         """Initialize the Bluetooth connection
 

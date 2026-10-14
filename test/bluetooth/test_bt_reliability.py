@@ -925,6 +925,55 @@ class DeviceInformationTest(_ApiTestCase):
         dev.stop_streaming()
 
 
+class ChangeCrcModeTest(_ApiTestCase):
+    """The CRC mode of a link that is already up"""
+
+    def test_the_mode_can_be_dropped_and_restored_and_the_commands_keep_working(self):
+        pd, dev = self.make(crc="auto")
+        self.assertEqual(dev.crc_len, 2)
+
+        dev.set_crc(0)
+        self.assertEqual(dev.crc_len, 0)
+        self.assertEqual(pd.device.crc_len, 0)
+        self.assertEqual(dev.get_sampling_rate(), 512.0)
+
+        dev.set_crc(2)
+        self.assertEqual((dev.crc_len, pd.device.crc_len), (2, 2))
+        self.assertEqual(dev.get_sampling_rate(), 512.0)
+
+        got = self.start_stream(dev)
+        self.assertTrue(self.wait_for(lambda: len(got) > 20))
+        self.assertEqual(dev.link_stats["crc_errors"], 0)
+
+    def test_the_same_mode_sends_nothing(self):
+        pd, dev = self.make(crc="auto")
+        before = [c for c, _ in pd.device.commands].count(0x8B)
+        dev.set_crc(2)
+        self.assertEqual([c for c, _ in pd.device.commands].count(0x8B), before)
+
+    def test_it_is_refused_while_streaming_and_with_a_wrong_length(self):
+        pd, dev = self.make(crc="auto")
+        with self.assertRaises(ValueError):
+            dev.set_crc(3)
+        self.start_stream(dev)
+        with self.assertRaises(ShimmerError):
+            dev.set_crc(0)
+        self.assertEqual(dev.crc_len, 2)
+
+    def test_a_firmware_without_the_mode_refuses_it(self):
+        pd, dev = self.make(device_kwargs={"fw": (3, 0, 11, 0)}, crc="auto")
+        with self.assertRaises(ValueError):
+            dev.set_crc(2)
+        dev.set_crc(0)  # already off: nothing to do
+
+    def test_a_device_that_does_not_answer_leaves_the_previous_mode(self):
+        pd, dev = self.make(crc="auto", command_timeout=0.3)
+        pd.device.ignore.add(0x8B)
+        with self.assertRaises(ShimmerError):
+            dev.set_crc(0)
+        self.assertEqual(dev.crc_len, 2)
+
+
 class ThroughputWarningTest(_ApiTestCase):
 
     def test_warns_when_the_crc_pushes_the_stream_to_the_limit(self):

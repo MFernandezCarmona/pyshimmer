@@ -43,6 +43,8 @@ adapter; see `shimmer_reliability/RESULTADOS.md` in the workspace for the data.
   `ShimmerConfigurationError` (a `ShimmerError`) if the chip took something else.
 - `ShimmerBluetooth.get_battery_reading()`: voltage, capacity and the charging status byte of the response
   (`BatteryReading`, `ChargingStatus`). It can be used while streaming; each call costs about 5 packets at 2048 Hz.
+- `ShimmerBluetooth.set_crc()`: change the CRC mode of a link that is up and idle, for a caller that only knows
+  how fast the stream is after reading the device.
 - `ShimmerBluetooth.get_expansion_board()` (`ExpansionBoard`): the identification of the board under the Shimmer3,
   with `has_exg`.
 
