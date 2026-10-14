@@ -25,6 +25,7 @@ from pyshimmer.dev.exg import (
     ExGRLDLead,
     ERLDRef,
     ExGRegister,
+    exg_data_rate_for_sampling_rate,
 )
 
 
@@ -144,3 +145,63 @@ class ExGRegisterTest(TestCase):
             y = bytearray(x)
             y[i] = random.randrange(0, 256)
             do_assert(x, y, False)
+
+
+class ExGRegisterHelpersTest(TestCase):
+    # Read from Shimmer3 units: one configured by Consensys for EMG, one left in test
+    # signal mode
+    EMG = bytes.fromhex("04a810696020000002" "03")
+    TEST = bytes.fromhex("03ab1065652000000203")
+
+    def test_data_rate_for_sampling_rate_is_the_smallest_rate_that_is_not_below(self):
+        expected = {
+            1: 125,
+            50: 125,
+            125: 125,
+            126: 250,
+            250: 250,
+            500: 500,
+            512: 1000,
+            1000: 1000,
+            1024: 2000,
+            2000: 2000,
+            2048: 4000,
+            4000: 4000,
+            4001: 8000,
+            10000: 8000,
+        }
+        for sr, sps in expected.items():
+            self.assertEqual(exg_data_rate_for_sampling_rate(sr), sps, f"rate {sr}")
+
+    def test_with_data_rate_changes_only_the_rate_bits(self):
+        new = ExGRegister(self.TEST).with_data_rate(2000)
+        self.assertEqual(new.data_rate, 2000)
+        self.assertEqual(new.binary, bytes.fromhex("04ab1065652000000203"))
+        self.assertEqual(ExGRegister(self.EMG).with_data_rate(125).binary[0], 0x00)
+        self.assertEqual(ExGRegister(self.EMG).with_data_rate(8000).binary[0], 0x06)
+
+    def test_with_data_rate_rejects_unsupported_rates(self):
+        with self.assertRaises(ValueError):
+            ExGRegister(self.EMG).with_data_rate(1024)
+
+    def test_data_rate_index(self):
+        self.assertEqual(ExGRegister(self.TEST).data_rate_index, 3)
+        self.assertEqual(ExGRegister(self.EMG).data_rate_index, 4)
+
+    def test_test_signal_detection(self):
+        self.assertTrue(ExGRegister(self.TEST).uses_test_signal)
+        self.assertFalse(ExGRegister(self.EMG).uses_test_signal)
+
+    def test_emg_preset_is_what_consensys_wrote_on_the_emg_units(self):
+        self.assertEqual(ExGRegister.emg_preset().binary, self.EMG)
+        reg = ExGRegister.emg_preset(rate_sps=1000, gain=6)
+        self.assertEqual(reg.data_rate, 1000)
+        self.assertEqual((reg.ch1_gain, reg.ch2_gain), (6, 6))
+        self.assertEqual((reg.ch1_mux, reg.ch2_mux), (ExGMux.INPUT3, ExGMux.NORMAL))
+        self.assertFalse(reg.uses_test_signal)
+
+    def test_emg_preset_validates_its_arguments(self):
+        with self.assertRaises(ValueError):
+            ExGRegister.emg_preset(gain=5)
+        with self.assertRaises(ValueError):
+            ExGRegister.emg_preset(rate_sps=1024)

@@ -15,7 +15,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
+import select
 import struct
+import time
 from collections.abc import Callable
 from io import RawIOBase
 
@@ -94,6 +96,22 @@ class BufferedReader:
         """Clear the internal buffer of the reader"""
         self._buf = bytearray()
 
+    @property
+    def buffered(self) -> bytes:
+        """The bytes that have been taken from the stream but not been read yet"""
+        return bytes(self._buf)
+
+    def append(self, data: bytes) -> None:
+        """Add bytes that have been read from the stream elsewhere to the end of the
+        internal buffer"""
+        self._buf += data
+
+    @property
+    def buffered_len(self) -> int:
+        """The number of bytes that have been taken from the stream but not been read
+        yet"""
+        return len(self._buf)
+
 
 class SerialBase:
     """Wrapper around :class:`serial.Serial` which provides multiple convenience
@@ -131,6 +149,59 @@ class SerialBase:
         """
         self._serial.reset_input_buffer()
         self._reader.reset()
+
+    def available(self) -> int | None:
+        """The number of bytes that can be read without blocking
+
+        :return: The number of bytes, or None if the underlying stream cannot tell
+        """
+        have = self._reader.buffered_len
+        try:
+            return have + self._serial.in_waiting
+        except (AttributeError, OSError, ValueError, TypeError):
+            return None
+
+    def wait_readable(self, timeout: float) -> None:
+        """Wait for new bytes and move them into the internal buffer
+
+        Blocks until the operating system has bytes that have not been taken yet, the
+        timeout has passed or the read has been cancelled. The bytes that arrive are
+        *read* here (they are available, so this does not block): that is what makes
+        the next wait block until still newer bytes arrive instead of returning at once
+        for bytes that were not enough.
+
+        :param timeout: Seconds to wait at most
+        :raises ReadAbort: If :meth:`cancel_read` was called
+        :raises serial.SerialException: If the device hung up
+        """
+        abort = getattr(self._serial, "pipe_abort_read_r", None)
+        try:
+            fds = [self._serial.fileno()]
+            if abort is not None:
+                fds.append(abort)
+            ready, _, _ = select.select(fds, [], [], timeout)
+        except (AttributeError, OSError, ValueError, TypeError):
+            # No usable file descriptor (e.g. a stream that is not a tty): poll
+            n = self.available()
+            if n is None or n <= self._reader.buffered_len:
+                time.sleep(min(timeout, 0.0005))
+            return
+
+        if abort is not None and abort in ready:
+            raise ReadAbort("The read was cancelled while waiting for more bytes.")
+
+        if ready:
+            try:
+                n = max(self._serial.in_waiting, 1)
+            except (AttributeError, OSError, ValueError, TypeError):
+                n = 1
+            # Readable means that at least one byte can be taken without blocking, or
+            # that the device hung up (which makes pyserial raise). A short result
+            # means the read was cancelled.
+            data = self._serial.read(n)
+            self._reader.append(data)
+            if len(data) < n:
+                raise ReadAbort("The read was cancelled while waiting for more bytes.")
 
     def write(self, data: bytes) -> int:
         """Write the data to the underlying serial stream

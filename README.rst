@@ -280,6 +280,87 @@ calls.
 
 The example shows how to make simple calls and how to use the Bluetooth streaming capabilities of the device.
 
+Reliable connections
+^^^^^^^^^^^^^^^^^^^^
+
+A Bluetooth link to a body-worn sensor is not reliable: a device refuses a connection, a byte is lost, the person
+walks away. The API is built so that none of this can leave your program blocked or silently without data.
+
+.. code-block:: python
+
+    import logging
+
+    from pyshimmer import ShimmerBluetooth, ShimmerError, ConnectLock, ESensorGroup, DataPacket
+
+    logging.basicConfig(level=logging.INFO)  # the library logs through the "pyshimmer" loggers
+
+
+    def handler(pkt: DataPacket) -> None:
+        ...  # called in the read thread for every data packet
+
+
+    def on_link_error(err: ShimmerError) -> None:
+        # Runs in the thread that noticed. Do not block here: set a flag and let your main loop reconnect.
+        print(f'Link lost: {err}')
+
+
+    # Open + initialize with retries. Starting several devices at once: hold the lock until each one streams, and
+    # keep the next one away for 2 s more (min_interval): a device that has just started is not ready to be
+    # followed by another connection.
+    with ConnectLock('/tmp/pyshimmer_bt.lock', min_interval=2.0):
+        shim_dev = ShimmerBluetooth.connect('/dev/rfcomm42', retries=3)
+        shim_dev.add_error_callback(on_link_error)
+
+        shim_dev.set_sampling_rate(1024.0, update_exg_rate=True)   # also puts the ExG chip at 2000 SPS
+        shim_dev.set_sensors([ESensorGroup.EXG1_24BIT])
+        shim_dev.add_stream_callback(handler)
+        shim_dev.start_streaming(wait_for_data=10.0)               # returns when the first packet arrived
+
+    # ... shim_dev.connected, shim_dev.link_stats ...
+    shim_dev.stop_streaming()
+    shim_dev.shutdown()
+
+What you get:
+
+* **Timeouts.** A request that is not answered within :code:`command_timeout` raises :code:`ShimmerTimeoutError`;
+  the link stays usable. Late replies are recognized and discarded.
+* **Failure notification.** If the read loop crashes, the device hangs up or the stream stalls
+  (:code:`stall_timeout`), the error callbacks are called, the outstanding requests raise :code:`ShimmerLinkError`
+  and so does every later one. The link cannot be revived: :code:`shutdown()` it and connect again.
+* **Frame validation.** With firmware >= 0.13.7 the device appends a CRC to every frame (:code:`crc='auto'`). A
+  frame that fails is dropped and the receiver resynchronizes without losing the valid frames that follow. Without
+  CRC, a data packet must be followed by a valid header and continue the device timestamps.
+  :code:`link_stats` counts what the receiver saw (:code:`crc_errors`, :code:`skipped_bytes`...).
+* **Stale streams.** :code:`initialize()` stops a stream that a crashed session left running.
+* **Exceptions in your stream callback** are logged and counted; they do not end the stream.
+
+Things worth knowing, all measured on Shimmer3 units with LogAndStream 0.15.4:
+
+* The device needs about 1.5 s (up to 5 s) to start sampling after it acknowledged :code:`start_streaming`.
+  Starting several devices on one adapter at the same moment fails; starting them one after the other works, also
+  while the others are streaming. Hold a :code:`ConnectLock` until :code:`start_streaming(wait_for_data=...)`
+  has returned **and keep the next connection away for 1-2 s more**: :code:`ConnectLock(path, min_interval=2.0)`.
+  The first data packet arrives before the device has settled; a connection made then fails ("The read loop
+  crashed ... returned no data"), and from then on opening the rfcomm port answers :code:`EBUSY` ("Device or
+  resource busy") for about 30 s: the kernel keeps the channel of the failed attempt until the RFCOMM connection
+  timer expires, and every new attempt, of any process, finds it. Three units started at the same moment at
+  1024 Hz took 41 to 86 s to stream (11-18 :code:`EBUSY` per affected unit) with the lock released at the first
+  data, and 15-18 s (none) with :code:`min_interval=2.0`. Holding the lock 1 s after the first data was already
+  enough in the same test.
+* The Bluetooth module sustains about 22 kB/s without losses. At 2048 Hz an EXG1 stream is 22.5 kB/s without CRC and
+  26.6 kB/s with the 2-byte CRC: pass :code:`crc='off'` (or :code:`crc=1`) at the top of the range.
+* Do not poll the device while it streams: each command costs about 7 samples at 2 kHz. Use the watchdog.
+* :code:`set_sampling_rate()` only sets the microcontroller. The ExG chips keep the data rate they were configured
+  with, so a chip at 1000 SPS read at 2048 Hz returns every conversion twice. Use :code:`update_exg_rate=True`.
+  :code:`start_streaming()` logs a warning when the chip is slower than the sampling rate or routes the internal
+  test signal (:code:`ExGRegister.uses_test_signal`); :code:`ExGRegister.emg_preset()` is the configuration of the EMG
+  User Guide.
+* With ExG enabled, 512 Hz and 600 Hz lose 65 % and 17 % of the packets on these devices (a firmware behavior,
+  not the link), 50 Hz is fine and 768 Hz and above are clean. Other rates below 700 Hz were not measured: test
+  yours with ``shimmer_reliability/device_experiment.py sweep``.
+* The full set of sensors of the ROS node (accelerometers, gyroscope, magnetometer, battery and EXG) at 1024 Hz
+  loses 17 % of the packets: stream the ExG channels alone at high rates.
+
 Using the Dock API
 ^^^^^^^^^^^^^^^^^^
 

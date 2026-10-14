@@ -59,6 +59,10 @@ class ExGRegister:
         6: 12,
     }
     DATA_RATE_MAP = {0: 125, 1: 250, 2: 500, 3: 1000, 4: 2000, 5: 4000, 6: 8000, 7: -1}
+    # The inverse maps: sample rate in SPS -> value of the three DR bits, gain -> value
+    # of the three gain bits
+    DATA_RATE_INDEX = {sps: idx for idx, sps in DATA_RATE_MAP.items() if sps > 0}
+    GAIN_INDEX = {gain: idx for idx, gain in GAIN_MAP.items()}
     PD_BIT = 0x01 << 7
     RLD_PD_BIT = 0x01 << 5
 
@@ -167,6 +171,78 @@ class ExGRegister:
         return self.DATA_RATE_MAP[dr_bin]
 
     @property
+    def data_rate_index(self) -> int:
+        """The value of the three data rate bits of CONFIG1 (0: 125 SPS ... 6: 8000
+        SPS)"""
+        return self._reg_bin[0] & 0x07
+
+    @property
+    def uses_test_signal(self) -> bool:
+        """True if an input multiplexer routes the internal test signal instead of the
+        electrodes"""
+        try:
+            return ExGMux.TEST_SIGNAL in (self.ch1_mux, self.ch2_mux)
+        except ValueError:  # a multiplexer value without a name
+            return False
+
+    def with_data_rate(self, rate_sps: int) -> ExGRegister:
+        """Return a copy of the registers with another data rate
+
+        :param rate_sps: One of 125, 250, 500, 1000, 2000, 4000, 8000
+        :raises ValueError: If the chip does not support the rate
+        """
+        if rate_sps not in self.DATA_RATE_INDEX:
+            raise ValueError(
+                f"The ExG chips support {sorted(self.DATA_RATE_INDEX)} SPS, "
+                f"not {rate_sps}"
+            )
+
+        reg = bytearray(self._reg_bin)
+        reg[0] = (reg[0] & 0xF8) | self.DATA_RATE_INDEX[rate_sps]
+        return ExGRegister(bytes(reg))
+
+    @classmethod
+    def emg_preset(cls, rate_sps: int = 2000, gain: int = 12) -> ExGRegister:
+        """The register contents recommended by the EMG User Guide (Rev 1.12) for
+        chip 1
+
+        Channel 1 on IN3 and channel 2 on its normal inputs (table 3-4), no test
+        signal, the right-leg drive buffer on with the internal reference (tables 3-5
+        and 3-6). With the default arguments it equals the configuration found on
+        Shimmer3 EMG units that were configured with Consensys.
+
+        :param rate_sps: The data rate, see :meth:`with_data_rate`
+        :param gain: The gain of both channels, one of 1, 2, 3, 4, 6, 8, 12
+        """
+        if gain not in cls.GAIN_INDEX:
+            raise ValueError(
+                f"The ExG chips support the gains {sorted(cls.GAIN_INDEX)}, not {gain}"
+            )
+        if rate_sps not in cls.DATA_RATE_INDEX:
+            raise ValueError(
+                f"The ExG chips support {sorted(cls.DATA_RATE_INDEX)} SPS, "
+                f"not {rate_sps}"
+            )
+
+        g = cls.GAIN_INDEX[gain] << 4
+        return cls(
+            bytes(
+                (
+                    cls.DATA_RATE_INDEX[rate_sps],
+                    0xA8,
+                    0x10,
+                    g | 0x09,
+                    g | 0x00,
+                    0x20,
+                    0x00,
+                    0x00,
+                    0x02,
+                    0x03,
+                )
+            )
+        )
+
+    @property
     def rld_powerdown(self) -> bool:
         rld_byte = self._get_rld_byte()
         return not bit_is_set(rld_byte, self.RLD_PD_BIT)
@@ -197,3 +273,22 @@ def is_exg_ch(ch_type: EChannelType) -> bool:
     # This is hacky but protected by unit tests
     regex = re.compile(r"EXG\d_CH\d_\d{2}BIT")
     return regex.match(ch_type.name) is not None
+
+
+def exg_data_rate_for_sampling_rate(sampling_rate_hz: float) -> int:
+    """The ExG chip data rate the official Shimmer APIs select for a sampling rate
+
+    The smallest rate that is not below the sampling rate, so that every sample read by
+    the microcontroller is a new conversion. (Consensys and the C# API do this whenever
+    the sampling rate changes; pyshimmer does not touch the chip unless asked to.)
+
+    Args:
+        sampling_rate_hz: The sampling rate of the device in Hz
+
+    Returns:
+        The data rate in samples per second: 125, 250, 500, 1000, 2000, 4000 or 8000
+    """
+    for rate in (125, 250, 500, 1000, 2000, 4000):
+        if sampling_rate_hz <= rate:
+            return rate
+    return 8000

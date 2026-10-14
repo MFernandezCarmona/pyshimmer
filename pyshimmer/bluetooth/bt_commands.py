@@ -80,6 +80,12 @@ class DataPacket:
         """
         return self._values[item]
 
+    @property
+    def payload_size(self) -> int:
+        """The number of bytes that follow the header byte of a data packet with these
+        channels"""
+        return sum(t.size for _, t in self._types)
+
     def receive(self, ser: BluetoothSerial) -> None:
         """Receive and decode a data packet
 
@@ -90,6 +96,30 @@ class DataPacket:
         for channel_type, channel_dtype in self._types:
             data_bin = ser.read(channel_dtype.size)
             self._values[channel_type] = channel_dtype.decode(data_bin)
+
+    def decode(self, payload: bytes) -> None:
+        """Decode a data packet whose bytes have already been received
+
+        This allows to validate a packet (framing, CRC) before it is decoded and handed
+        to the callbacks.
+
+        :param payload: The bytes after the header byte, exactly :attr:`payload_size`
+            of them
+        :raises ValueError: If the payload has the wrong length
+        """
+        if len(payload) != self.payload_size:
+            raise ValueError(
+                f"Data packet payload must have {self.payload_size} bytes, "
+                f"not {len(payload)}"
+            )
+
+        offset = 0
+        for channel_type, channel_dtype in self._types:
+            size = channel_dtype.size
+            self._values[channel_type] = channel_dtype.decode(
+                payload[offset : offset + size]
+            )
+            offset += size
 
 
 class ShimmerCommand(ABC):
@@ -709,3 +739,57 @@ class DummyCommand(OneShotCommand):
             will be sent to
         """
         super().__init__(rev, DUMMY_COMMAND)
+
+
+class SetCrcCommand(ShimmerCommand):
+
+    def __init__(self, rev: HardwareRevision, crc_len: int):
+        """Select the CRC the device appends to the frames it sends
+
+        The acknowledgment of this command already carries the CRC of the new mode
+        (verified on LogAndStream 0.15.4), so the receiving side must switch modes
+        *before* it sends the command.
+
+        :param rev: The hardware revision of the Shimmer device this command
+            will be sent to
+        :param crc_len: The number of CRC bytes: 0 (off), 1 or 2
+        """
+        super().__init__(rev)
+
+        if crc_len not in (0, 1, 2):
+            raise ValueError(f"CRC length must be 0, 1 or 2, not {crc_len}")
+
+        self._crc_len = crc_len
+
+    def send(self, ser: BluetoothSerial) -> None:
+        ser.write_command(SET_CRC_COMMAND, "<B", self._crc_len)
+
+
+def response_parsers(rev: HardwareRevision) -> dict:
+    """Map the response code of every known response to a factory of the command that
+    decodes it
+
+    Used to consume (and discard) responses that arrive after their request has timed
+    out, or that nobody asked for, without losing the alignment of the byte stream.
+
+    :param rev: The hardware revision of the device
+    """
+    if rev.hardware_version == HardwareVersion.SHIMMER3R:
+        inquiry = Shimmer3RInquiryCommand
+    else:
+        inquiry = Shimmer3InquiryCommand
+
+    return {
+        bytes((SAMPLING_RATE_RESPONSE,)): lambda: GetSamplingRateCommand(rev),
+        bytes((INQUIRY_RESPONSE,)): lambda: inquiry(rev),
+        bytes((FW_VERSION_RESPONSE,)): lambda: GetFirmwareVersionCommand(rev),
+        bytes((ALL_CALIBRATION_RESPONSE,)): lambda: GetAllCalibrationCommand(rev),
+        bytes((EXG_REGS_RESPONSE,)): lambda: GetEXGRegsCommand(rev, 0),
+        bytes((SHIMMER_VERSION_RESPONSE,)): lambda: GetShimmerHardwareVersion(rev),
+        bytes((RWC_RESPONSE,)): lambda: GetRealTimeClockCommand(rev),
+        bytes((CONFIGTIME_RESPONSE,)): lambda: GetConfigTimeCommand(rev),
+        bytes((EXPID_RESPONSE,)): lambda: GetExperimentIDCommand(rev),
+        bytes((SHIMMERNAME_RESPONSE,)): lambda: GetDeviceNameCommand(rev),
+        FULL_BATTERY_RESPONSE: lambda: GetBatteryCommand(rev, False),
+        FULL_STATUS_RESPONSE: lambda: GetStatusCommand(rev),
+    }
