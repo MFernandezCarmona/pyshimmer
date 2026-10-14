@@ -538,6 +538,11 @@ class IntegrationTestHelper:
     ):
         self.mock_creator.create_mock()
 
+        # These tests assert the exact bytes of the protocol sequence, so the optional
+        # steps that add traffic (stopping a stale stream, enabling the CRC mode) are
+        # off unless a test asks for them.
+        bt_kwargs.setdefault("presync", False)
+        bt_kwargs.setdefault("crc", "off")
         self.sot = ShimmerBluetooth(self.mock_creator.slave_serial, **bt_kwargs)
 
         if run_sot_initialize:

@@ -34,3 +34,14 @@ class ShimmerTimeoutError(ShimmerError, TimeoutError):
 
 class ShimmerConnectError(ShimmerError):
     """No usable connection could be established, even after the configured retries."""
+
+
+class CommandRefused(ShimmerError):
+    """The device answered a command with a NACK instead of an acknowledgment: it understood the request and
+    declined it.
+
+    A refusal is a normal part of the protocol and does not mean the connection is gone. The firmware refuses
+    every command except the SD sync command and an acknowledgment while SD sync is enabled, any set command
+    while the device is sensing, a sync mode mismatch, an out-of-range InfoMem or calibration write, and a
+    handful of commands it accepts but has never implemented.
+    """

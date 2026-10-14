@@ -15,6 +15,13 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from .bluetooth.bt_api import ShimmerBluetooth, CommandRefused
+from .bluetooth.bt_errors import (
+    ShimmerError,
+    ShimmerLinkError,
+    ShimmerTimeoutError,
+    ShimmerConnectError,
+)
+from .bluetooth.bt_lock import ConnectLock
 from .bluetooth.bt_commands import DataPacket
 from .dev.base import DEFAULT_BAUDRATE
 from .dev.channels import ChannelDataType, EChannelType, ESensorGroup
