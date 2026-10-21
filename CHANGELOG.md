@@ -82,6 +82,8 @@ adapter; see `shimmer_reliability/RESULTADOS.md` in the workspace for the data.
 - A single lost acknowledgment shifted the matching of all later acknowledgments.
 - Connecting to a device that was still streaming (e.g. after the previous process was killed) failed.
 - A packet that lost a byte was delivered to the callbacks as valid data.
+- `ChargingStatus`: `SUSPENDED` is `0xC0` and `BAD_BATTERY` is `0x00`, not the other way round as in Table 7-6 of the firmware
+  manual. A unit that is not docked has no charger and sends `0xC0`; it was reported as having a bad battery.
 
 ## 1.0.0 - 2025-10-25
 

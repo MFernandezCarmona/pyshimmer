@@ -22,13 +22,18 @@ from enum import IntEnum
 class ChargingStatus(IntEnum):
     """The charging status byte of the response to GET_VBATT_COMMAND
 
-    The values are those of Table 7-6 of the LogAndStream firmware manual (Rev 0.11a).
+    The byte is the state of the two (active low) status pins of the charger chip in bits 7 and 6, so a unit with no
+    charger connected, which is every unit that is not docked, reports SUSPENDED (both pins high) and a battery
+    that the chip finds bad reports BAD_BATTERY (both pins low). Table 7-6 of the LogAndStream firmware manual (Rev
+    0.11a) lists these two the other way round; the firmware (SHIMMER3_BT_COMMUNICATION_PROTOCOL.md, section 7.4, of
+    https://github.com/ShimmerResearch/log-and-stream-common) and units with healthy batteries off the dock, which
+    send 0xC0, say that it is the way they are here.
     """
 
-    SUSPENDED = 0x00
+    SUSPENDED = 0xC0
     FULLY_CHARGED = 0x40
     PRECONDITIONING = 0x80
-    BAD_BATTERY = 0xC0
+    BAD_BATTERY = 0x00
 
 
 @dataclass(frozen=True)

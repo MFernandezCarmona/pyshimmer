@@ -22,11 +22,12 @@ from pyshimmer.util import battery_adc_to_voltage
 
 class BatteryReadingTest(TestCase):
 
-    def test_the_charging_status_values_are_those_of_the_manual(self):
-        self.assertEqual(ChargingStatus.SUSPENDED, 0x00)
+    def test_the_charging_status_values_are_those_of_the_charger_pins(self):
+        # both pins high: no charger (a unit that is not docked); both low: bad battery. The manual has them swapped.
+        self.assertEqual(ChargingStatus.SUSPENDED, 0xC0)
         self.assertEqual(ChargingStatus.FULLY_CHARGED, 0x40)
         self.assertEqual(ChargingStatus.PRECONDITIONING, 0x80)
-        self.assertEqual(ChargingStatus.BAD_BATTERY, 0xC0)
+        self.assertEqual(ChargingStatus.BAD_BATTERY, 0x00)
 
     def test_the_status_of_a_listed_byte(self):
         for status in ChargingStatus:
